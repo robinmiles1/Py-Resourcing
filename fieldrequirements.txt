@@ -1,0 +1,6 @@
+Resource - Free text, potentially a dropdown that auto populates based on logged in user
+Type - Project/BAU (dropdown)
+Name - Freetext
+Start date - Date selector
+End date - Date selector
+Estimated time per day - number field only (allow decimals)
