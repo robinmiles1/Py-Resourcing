@@ -296,4 +296,4 @@ python3 pyresourcing.py
 ---
 
 *Py Resourcing is a single-file Python application with zero mandatory dependencies.*
-*Author: Robin Miles | Technology Services*
+*Author: Robin Miles*
