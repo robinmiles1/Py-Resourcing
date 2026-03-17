@@ -7,6 +7,40 @@ Technology Services | Middleware Platform Team
 
 ---
 
+## Screenshots
+
+### Dashboard — Allocation Heatmap & Team Synopsis
+
+![Dashboard](screenshots/dashboard.png)
+
+> **① Navigation bar** — switch between Dashboard and Resource Requests. Online status and live clock top-right.
+>
+> **② Stat cards** — at-a-glance counts for total resources, allocations, people active today, and anyone exceeding 7.4 hrs (overloaded).
+>
+> **③ Allocation Heatmap** — resources listed down the left, dates across the top. Use the **Week / Month / Quarter** selector and **‹ ›** arrows to navigate the timeline. Colour key: blue ≤4h · green 4–6h · amber 6–7.4h · red >7.4h (overloaded). Weekends are shown greyed out with no colour.
+>
+> **④ Team Synopsis** — auto-calculated for the visible period: active resource count vs. total, average daily team load vs. full availability (resources × 7.4h), busiest and quietest weekdays, and most/least utilised resource.
+
+---
+
+### Dashboard — Allocations in Period Table
+
+![Dashboard lower](screenshots/dashboard_lower.png)
+
+> **⑤ Allocations in Period** — all allocation records that overlap the currently selected heatmap window, sorted by start date. The badge shows the count. Updates automatically when you change the view or navigate periods.
+
+---
+
+### Resource Requests
+
+![Resource Requests](screenshots/requests.png)
+
+> **⑥ New Allocation Request form** — six fields: Resource (pre-filled from your saved name), Type (Project / BAU), Name, Start Date, End Date, and Estimated Hours per Day (default 7.4, increments of 0.1).
+>
+> **⑦ All Allocations table** — full list of every allocation with **Edit** and **Delete** per row. Edit opens a modal pre-filled with the existing values.
+
+---
+
 ## Table of Contents
 
 1. [Prerequisites](#1-prerequisites)
