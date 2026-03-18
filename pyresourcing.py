@@ -85,7 +85,10 @@ class Database:
         def has_column(table, column):
             cur = c.execute(f"PRAGMA table_info({table})")
             return any(row[1] == column for row in cur.fetchall())
-        # Placeholder for future schema migrations
+        if not has_column("allocations", "crq_number"):
+            c.execute("ALTER TABLE allocations ADD COLUMN crq_number TEXT NOT NULL DEFAULT ''")
+        if not has_column("allocations", "requestor"):
+            c.execute("ALTER TABLE allocations ADD COLUMN requestor TEXT NOT NULL DEFAULT ''")
         c.commit()
 
     def execute(self, sql, params=()):
@@ -195,6 +198,10 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
 .panel-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; }
 .panel-badge { font-family: var(--font-mono); font-size: 10px; padding: 2px 8px; border-radius: 99px; background: var(--accent-glow); color: var(--accent); }
 .panel-body { padding: 12px 16px; }
+.panel-header { cursor: pointer; user-select: none; }
+.panel-chevron { font-size: 10px; color: var(--text-muted); transition: transform 0.2s; display: inline-block; margin-left: 6px; vertical-align: middle; opacity: 0.6; }
+.panel.collapsed .panel-chevron { transform: rotate(-90deg); }
+.panel.collapsed > *:not(.panel-header) { display: none !important; }
 
 /* Data table */
 .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -261,7 +268,7 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
 /* Heatmap */
 .heatmap-wrap { overflow-x: auto; padding-bottom: 4px; }
 .heatmap-table { border-collapse: separate; border-spacing: 2px; font-size: 11px; }
-.heatmap-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); text-align: right; padding-right: 10px; white-space: nowrap; min-width: 120px; font-weight: 500; position: sticky; left: 0; background: var(--bg-card); z-index: 2; }
+.heatmap-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); text-align: right; padding-right: 10px; white-space: nowrap; width: 120px; min-width: 120px; font-weight: 500; position: sticky; left: 0; background: var(--bg-card); z-index: 2; border-right: 1px solid var(--border-subtle); }
 .heatmap-cell { width: 28px; height: 28px; border-radius: 3px; cursor: pointer; transition: transform 0.1s ease, opacity 0.1s ease; position: relative; }
 .heatmap-cell:hover { transform: scale(1.2); z-index: 10; }
 .hm-empty  { background: rgba(56,189,248,0.04); border: 1px solid rgba(56,189,248,0.06); }
@@ -314,13 +321,13 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
 <div class="page active" id="page-dashboard">
     <div class="stats-row" id="stats-row"></div>
 
-    <div class="panel anim d1">
-        <div class="panel-header">
-            <div class="panel-title">Allocation Heatmap</div>
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <div class="panel anim d1" id="panel-heatmap">
+        <div class="panel-header" onclick="togglePanel(this.closest('.panel'))">
+            <div class="panel-title">Allocation Heatmap <span class="panel-chevron">▾</span></div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap" onclick="event.stopPropagation()">
                 <div style="display:flex;gap:0" class="tab-bar" id="view-tabs" style="border:none;padding:0;background:none;border-bottom:none">
-                    <button class="tab-btn active" data-view="week">Week</button>
-                    <button class="tab-btn" data-view="month">Month</button>
+                    <button class="tab-btn" data-view="week">Week</button>
+                    <button class="tab-btn active" data-view="month">Month</button>
                     <button class="tab-btn" data-view="quarter">Quarter</button>
                 </div>
                 <button class="btn btn-sm" id="btn-prev">&#8249;</button>
@@ -343,16 +350,33 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
     </div>
 
     <div class="panel anim d2" id="synopsis-panel" style="display:none">
-        <div class="panel-header">
-            <div class="panel-title">Team Synopsis</div>
+        <div class="panel-header" onclick="togglePanel(this.closest('.panel'))">
+            <div class="panel-title">Team Synopsis <span class="panel-chevron">▾</span></div>
             <span id="synopsis-period-label" style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted)"></span>
         </div>
         <div class="panel-body" id="synopsis-body" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px"></div>
     </div>
 
-    <div class="panel anim d3">
-        <div class="panel-header">
-            <div class="panel-title">Allocations in Period</div>
+    <div class="panel anim" id="charts-panel" style="display:none">
+        <div class="panel-header" onclick="togglePanel(this.closest('.panel'))">
+            <div class="panel-title">Workload Breakdown <span class="panel-chevron">▾</span></div>
+            <span id="charts-period-label" style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted)"></span>
+        </div>
+        <div class="panel-body" style="display:flex;justify-content:center;gap:56px;flex-wrap:wrap;align-items:flex-start;padding:20px 24px">
+            <div style="flex:0 1 280px">
+                <div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:16px;text-align:center">Project vs BAU — Allocation Count</div>
+                <div id="chart-donut" style="display:flex;align-items:center;justify-content:center;gap:32px"></div>
+            </div>
+            <div style="flex:0 1 480px">
+                <div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:16px;text-align:center">Hours by Resource — Project vs BAU</div>
+                <div id="chart-bars" style="overflow-x:auto;display:flex;justify-content:center"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel anim d3" id="panel-period-allocs">
+        <div class="panel-header" onclick="togglePanel(this.closest('.panel'))">
+            <div class="panel-title">Allocations in Period <span class="panel-chevron">▾</span></div>
             <span class="panel-badge" id="period-alloc-count">—</span>
         </div>
         <div class="panel-body" style="padding:0;overflow-x:auto">
@@ -373,9 +397,9 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
 
 <!-- ====== RESOURCE REQUESTS PAGE ====== -->
 <div class="page" id="page-requests">
-    <div class="panel anim d1">
-        <div class="panel-header">
-            <div class="panel-title">New Allocation Request</div>
+    <div class="panel anim d1" id="panel-new-alloc">
+        <div class="panel-header" onclick="togglePanel(this.closest('.panel'))">
+            <div class="panel-title">New Allocation Request <span class="panel-chevron">▾</span></div>
         </div>
         <div class="panel-body">
             <form class="form-grid" id="alloc-form" onsubmit="submitAlloc(event)">
@@ -385,11 +409,19 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
                 </div>
                 <div class="form-group">
                     <label class="form-label">Type</label>
-                    <select class="form-select" id="f-type" required>
+                    <select class="form-select" id="f-type" required onchange="toggleCrqField('f-crq-group', this.value)">
                         <option value="">— Select type —</option>
                         <option value="Project">Project</option>
                         <option value="BAU">BAU</option>
                     </select>
+                </div>
+                <div class="form-group" id="f-crq-group" style="display:none">
+                    <label class="form-label">CRQ # <span style="color:var(--text-muted);font-size:0.8em">(if applicable)</span></label>
+                    <input class="form-input" id="f-crq" type="text" placeholder="e.g. CRQ123456">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Requestor</label>
+                    <input class="form-input" id="f-requestor" type="text" placeholder="Requestor name">
                 </div>
                 <div class="form-group full">
                     <label class="form-label">Name</label>
@@ -414,9 +446,9 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
         </div>
     </div>
 
-    <div class="panel anim d2">
-        <div class="panel-header">
-            <div class="panel-title">All Allocations</div>
+    <div class="panel anim d2" id="panel-all-allocs">
+        <div class="panel-header" onclick="togglePanel(this.closest('.panel'))">
+            <div class="panel-title">All Allocations <span class="panel-chevron">▾</span></div>
             <span class="panel-badge" id="alloc-count">—</span>
         </div>
         <div class="panel-body" style="padding:0;overflow-x:auto">
@@ -425,6 +457,8 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
                     <th>Resource</th>
                     <th>Type</th>
                     <th>Name</th>
+                    <th>CRQ #</th>
+                    <th>Requestor</th>
                     <th>Start</th>
                     <th>End</th>
                     <th>Hrs/Day</th>
@@ -453,10 +487,18 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
                 </div>
                 <div class="form-group">
                     <label class="form-label">Type</label>
-                    <select class="form-select" id="e-type" required>
+                    <select class="form-select" id="e-type" required onchange="toggleCrqField('e-crq-group', this.value)">
                         <option value="Project">Project</option>
                         <option value="BAU">BAU</option>
                     </select>
+                </div>
+                <div class="form-group" id="e-crq-group" style="display:none">
+                    <label class="form-label">CRQ # <span style="color:var(--text-muted);font-size:0.8em">(if applicable)</span></label>
+                    <input class="form-input" id="e-crq" type="text" placeholder="e.g. CRQ123456">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Requestor</label>
+                    <input class="form-input" id="e-requestor" type="text">
                 </div>
                 <div class="form-group full">
                     <label class="form-label">Name</label>
@@ -485,7 +527,7 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
 
 <script>
 // ── State ────────────────────────────────────────────────────────────────
-let currentView  = 'week';
+let currentView  = 'month';
 let periodOffset = 0;
 const TODAY_STR  = new Date().toISOString().slice(0, 10);
 
@@ -610,10 +652,11 @@ async function loadDashboard() {
         api('/api/allocations'),
     ]);
 
-    if (allocs)   renderStats(allocs);
+    if (allocs)   renderStats(allocs, s, e2);
     if (heatData) renderHeatmap(heatData);
     if (heatData) renderSynopsis(heatData);
     if (allocs)   renderPeriodTable(allocs, s, e2);
+    if (allocs)   renderCharts(allocs, s, e2);
 }
 
 // ── Team synopsis ─────────────────────────────────────────────────────────
@@ -656,8 +699,8 @@ function renderSynopsis(data) {
         dayTotals[ds] = t;
     });
 
-    // Busiest / quietest days
-    const sortedDays = weekdays.slice().sort((a, b) => dayTotals[b] - dayTotals[a]);
+    // Busiest / quietest days (exclude zero-allocation days from quietest)
+    const sortedDays  = weekdays.filter(ds => dayTotals[ds] > 0).sort((a, b) => dayTotals[b] - dayTotals[a]);
     const busiestDay  = sortedDays[0];
     const quietestDay = sortedDays[sortedDays.length - 1];
 
@@ -690,8 +733,8 @@ function renderSynopsis(data) {
         statBlock('Avg Daily Team Load', avgDailyLoad.toFixed(1) + 'h / ' + (data.resources.length * 7.4).toFixed(1) + 'h', 'allocated vs available (' + data.resources.length + ' × 7.4h)', 'var(--info)') +
         statBlock('Busiest Day', busiestDay ? fmtDay(busiestDay) : '—',
             busiestDay ? dayTotals[busiestDay].toFixed(1) + ' combined hrs' : '', 'var(--warning)') +
-        statBlock('Quietest Day', quietestDay && dayTotals[quietestDay] > 0 ? fmtDay(quietestDay) : '—',
-            quietestDay && dayTotals[quietestDay] > 0 ? dayTotals[quietestDay].toFixed(1) + ' combined hrs' : 'no allocations', 'var(--success)') +
+        statBlock('Quietest Day', quietestDay ? fmtDay(quietestDay) : '—',
+            quietestDay ? dayTotals[quietestDay].toFixed(1) + ' combined hrs' : 'no allocations', 'var(--success)') +
         statBlock('Most Utilised', resourceTotals[mostUtil] > 0 ? mostUtil : '—',
             resourceTotals[mostUtil] > 0 ? resourceTotals[mostUtil].toFixed(1) + ' hrs total' : '', 'var(--accent)') +
         statBlock('Least Utilised', resourceTotals[leastUtil] > 0 ? leastUtil : '—',
@@ -729,35 +772,143 @@ function renderPeriodTable(allocs, startStr, endStr) {
 }
 
 // ── Stat cards ────────────────────────────────────────────────────────────
-function renderStats(allocs) {
+function renderStats(allocs, ps, pe) {
     const resources  = new Set(allocs.map(a => a.resource)).size;
     const today      = TODAY_STR;
-    const todayHours = {};
+    const periodAllocs = allocs.filter(a => a.start_date <= pe && a.end_date >= ps);
 
-    allocs.forEach(a => {
-        if (a.start_date <= today && a.end_date >= today) {
-            todayHours[a.resource] = (todayHours[a.resource] || 0) + a.hours_per_day;
+    // Active: resources with at least one allocation in period
+    const activePpl = new Set(periodAllocs.map(a => a.resource)).size;
+
+    // Overloaded: resources with any day >7.4h total in period
+    const dailyTotals = {};
+    periodAllocs.forEach(a => {
+        const s0 = a.start_date > ps ? a.start_date : ps;
+        const e0 = a.end_date   < pe ? a.end_date   : pe;
+        const d  = new Date(s0 + 'T00:00:00'), dEnd = new Date(e0 + 'T00:00:00');
+        while (d <= dEnd) {
+            if (d.getDay() !== 0 && d.getDay() !== 6) {
+                const ds = fmtDate(d);
+                if (!dailyTotals[a.resource]) dailyTotals[a.resource] = {};
+                dailyTotals[a.resource][ds] = (dailyTotals[a.resource][ds] || 0) + a.hours_per_day;
+            }
+            d.setDate(d.getDate() + 1);
         }
     });
+    const overloaded = Object.values(dailyTotals).reduce((sum, days) => sum + Object.values(days).filter(h => h > 7.4).length, 0);
 
-    const overloaded = Object.values(todayHours).filter(h => h > 7.4).length;
-    const activePpl  = Object.keys(todayHours).length;
+    const crqCount = new Set(periodAllocs.map(a => a.crq_number).filter(c => c)).size;
 
     const cards = [
-        { l: 'Resources',        v: resources,      c: 'blue',  a: 'a-blue',  s: 'unique people'     },
-        { l: 'Allocations',      v: allocs.length,  c: 'blue',  a: 'a-blue',  s: 'total entries'     },
-        { l: 'Active Today',     v: activePpl,       c: 'purple',a: 'a-purple',s: 'people with work'  },
-        { l: 'Overloaded Today', v: overloaded,      c: overloaded > 0 ? 'red' : 'green',
-          a: overloaded > 0 ? 'a-red' : 'a-green',  s: '&gt;7.4 hrs assigned' },
+        { l: 'Resources',          v: resources,      c: 'blue',  a: 'a-blue',  sub: 'unique resources'         },
+        { l: 'Allocations',        v: allocs.length,  c: 'blue',  a: 'a-blue',  sub: 'total entries'           },
+        { l: 'Active Today',       v: activePpl,       c: 'purple',a: 'a-purple',sub: 'resources with work'     },
+        { l: 'Overloaded in Period',v: overloaded,     c: overloaded > 0 ? 'red' : 'green',
+          a: overloaded > 0 ? 'a-red' : 'a-green',    sub: '&gt;7.4 hrs on any day'                            },
+        { l: 'CRQs in Period',     v: crqCount,        c: 'purple',a: 'a-purple',sub: 'unique change requests'  },
     ];
 
     document.getElementById('stats-row').innerHTML = cards.map((c, i) =>
         `<div class="stat-card ${c.a} anim d${i+1}">
             <div class="stat-label">${c.l}</div>
             <div class="stat-value ${c.c}">${c.v}</div>
-            <div class="stat-sub">${c.s}</div>
+            <div class="stat-sub">${c.sub}</div>
         </div>`
     ).join('');
+}
+
+// ── Workload charts ───────────────────────────────────────────────────────
+function renderCharts(allocs, ps, pe) {
+    const panel = document.getElementById('charts-panel');
+    const periodAllocs = allocs.filter(a => a.start_date <= pe && a.end_date >= ps);
+
+    if (periodAllocs.length === 0) { panel.style.display = 'none'; return; }
+    panel.style.display = 'block';
+
+    const { start, end } = getPeriodWindow();
+    document.getElementById('charts-period-label').textContent =
+        start.toLocaleDateString('en-GB', {day:'numeric',month:'short'}) + ' – ' +
+        end.toLocaleDateString('en-GB',   {day:'numeric',month:'short',year:'numeric'});
+
+    // ── Donut: allocation count by type ──────────────────────────────────
+    const projCount = periodAllocs.filter(a => a.type === 'Project').length;
+    const bauCount  = periodAllocs.filter(a => a.type === 'BAU').length;
+    const total     = projCount + bauCount;
+
+    function polarXY(cx, cy, r, angle) {
+        return [cx + r * Math.sin(angle), cy - r * Math.cos(angle)];
+    }
+    function donutArc(cx, cy, r, ir, a0, a1, fill) {
+        const [x1,y1] = polarXY(cx,cy,r,a0), [x2,y2] = polarXY(cx,cy,r,a1);
+        const [x3,y3] = polarXY(cx,cy,ir,a1),[x4,y4] = polarXY(cx,cy,ir,a0);
+        const lg = (a1 - a0) > Math.PI ? 1 : 0;
+        return `<path d="M${x1},${y1} A${r},${r} 0 ${lg},1 ${x2},${y2} L${x3},${y3} A${ir},${ir} 0 ${lg},0 ${x4},${y4} Z" fill="${fill}"/>`;
+    }
+
+    const projAngle = total > 0 ? (projCount / total) * 2 * Math.PI : 0;
+    const projPct   = total > 0 ? Math.round(projCount / total * 100) : 0;
+    const cx = 100, cy = 100, r = 76, ir = 46;
+    let donutSvg = `<svg viewBox="0 0 200 200" width="200" height="200">`;
+    if (projCount > 0 && bauCount > 0) {
+        donutSvg += donutArc(cx,cy,r,ir, 0, projAngle, '#38bdf8');
+        donutSvg += donutArc(cx,cy,r,ir, projAngle, 2*Math.PI, '#f59e0b');
+    } else {
+        donutSvg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${projCount > 0 ? '#38bdf8' : '#f59e0b'}"/>`;
+        donutSvg += `<circle cx="${cx}" cy="${cy}" r="${ir}" fill="#10151e"/>`;
+    }
+    donutSvg += `<text x="${cx}" y="${cy-7}" text-anchor="middle" fill="#e2e8f0" font-size="24" font-weight="700" font-family="JetBrains Mono,monospace">${total}</text>`;
+    donutSvg += `<text x="${cx}" y="${cy+13}" text-anchor="middle" fill="#8b99ad" font-size="10" font-family="Outfit,sans-serif">allocations</text>`;
+    donutSvg += `</svg>`;
+
+    const legend = `<div style="display:flex;flex-direction:column;gap:10px;justify-content:center">
+        <div style="display:flex;align-items:center;gap:8px;white-space:nowrap">
+            <span style="width:10px;height:10px;border-radius:2px;background:#38bdf8;flex-shrink:0"></span>
+            <span style="font-size:12px;color:var(--text-secondary)">Project</span>
+            <span style="font-size:12px;font-weight:600;font-family:var(--font-mono);color:#38bdf8">${projCount} (${projPct}%)</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;white-space:nowrap">
+            <span style="width:10px;height:10px;border-radius:2px;background:#f59e0b;flex-shrink:0"></span>
+            <span style="font-size:12px;color:var(--text-secondary)">BAU</span>
+            <span style="font-size:12px;font-weight:600;font-family:var(--font-mono);color:#f59e0b">${bauCount} (${100-projPct}%)</span>
+        </div>
+    </div>`;
+    document.getElementById('chart-donut').innerHTML = donutSvg + legend;
+
+    // ── Stacked bars: hours per resource ─────────────────────────────────
+    const resources = [...new Set(periodAllocs.map(a => a.resource))].sort();
+    const resHours  = {};
+    resources.forEach(r => { resHours[r] = { Project: 0, BAU: 0 }; });
+
+    periodAllocs.forEach(a => {
+        const overlapStart = a.start_date > ps ? a.start_date : ps;
+        const overlapEnd   = a.end_date   < pe ? a.end_date   : pe;
+        let days = 0;
+        const d = new Date(overlapStart + 'T00:00:00');
+        const dEnd = new Date(overlapEnd + 'T00:00:00');
+        while (d <= dEnd) { if (d.getDay() !== 0 && d.getDay() !== 6) days++; d.setDate(d.getDate()+1); }
+        resHours[a.resource][a.type] += a.hours_per_day * days;
+    });
+
+    const maxH   = Math.max(...resources.map(r => resHours[r].Project + resHours[r].BAU), 1);
+    const barH   = 24, gap = 8, labelW = 120, barMaxW = 300;
+    const svgH   = resources.length * (barH + gap) + 10;
+    const svgW   = labelW + barMaxW + 52;
+
+    let barsSvg = `<svg viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">`;
+    resources.forEach((res, i) => {
+        const y   = i * (barH + gap) + 4;
+        const ph  = resHours[res].Project, bh = resHours[res].BAU;
+        const tot = ph + bh;
+        const pw  = (ph / maxH) * barMaxW, bw = (bh / maxH) * barMaxW;
+        const short = res.length > 15 ? res.slice(0,14)+'…' : res;
+        barsSvg += `<text x="${labelW-6}" y="${y+barH/2+4}" text-anchor="end" fill="#8b99ad" font-size="10" font-family="Outfit,sans-serif">${short}</text>`;
+        barsSvg += `<rect x="${labelW}" y="${y}" width="${barMaxW}" height="${barH}" rx="3" fill="rgba(255,255,255,0.04)"/>`;
+        if (pw > 0) barsSvg += `<rect x="${labelW}" y="${y}" width="${pw}" height="${barH}" rx="3" fill="#38bdf8"/>`;
+        if (bw > 0) barsSvg += `<rect x="${labelW+pw}" y="${y}" width="${bw}" height="${barH}" rx="${pw>0?'0 3 3 0':'3'}" fill="#f59e0b"/>`;
+        if (tot > 0) barsSvg += `<text x="${labelW+pw+bw+5}" y="${y+barH/2+4}" fill="#e2e8f0" font-size="9" font-family="JetBrains Mono,monospace">${tot.toFixed(0)}h</text>`;
+    });
+    barsSvg += `</svg>`;
+    document.getElementById('chart-bars').innerHTML = barsSvg;
 }
 
 // ── Heatmap rendering ─────────────────────────────────────────────────────
@@ -773,11 +924,13 @@ function renderHeatmap(data) {
     const container = document.getElementById('heatmap-container');
 
     if (!data.resources || data.resources.length === 0) {
-        container.innerHTML =
-            '<div style="padding:32px;text-align:center;color:var(--text-muted);font-family:var(--font-mono);font-size:12px">' +
-            'No allocations in this period — add some via Resource Requests.</div>';
+        container.style.cssText = 'min-height:80px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:12px;font-family:var(--font-mono)';
+        container.innerHTML = '<div style="padding:32px;text-align:center">No allocations in this period — add some via Resource Requests.</div>';
         return;
     }
+
+    // Reset loading styles so position:sticky works correctly inside the table
+    container.style.cssText = '';
 
     const table = document.createElement('table');
     table.className = 'heatmap-table';
@@ -786,11 +939,13 @@ function renderHeatmap(data) {
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');
     const corner = document.createElement('th');
-    corner.style.minWidth = '130px';
+    corner.style.minWidth = '120px';
+    corner.style.width = '120px';
     corner.style.position = 'sticky';
     corner.style.left = '0';
     corner.style.background = 'var(--bg-card)';
     corner.style.zIndex = '3';
+    corner.style.borderRight = '1px solid var(--border-subtle)';
     headerRow.appendChild(corner);
 
     data.dates.forEach(dateStr => {
@@ -922,6 +1077,8 @@ async function loadAllocations() {
             '<td class="fname">' + escHtml(a.resource) + '</td>' +
             '<td>' + typePill + '</td>' +
             '<td>' + escHtml(a.name) + '</td>' +
+            '<td>' + escHtml(a.crq_number || '') + '</td>' +
+            '<td>' + escHtml(a.requestor || '') + '</td>' +
             '<td>' + a.start_date + '</td>' +
             '<td>' + a.end_date + '</td>' +
             '<td style="color:var(--accent)">' + a.hours_per_day + '</td>' +
@@ -934,6 +1091,23 @@ async function loadAllocations() {
     }).join('');
 }
 
+// ── Panel collapse ────────────────────────────────────────────────────────
+function togglePanel(panel) {
+    const collapsed = panel.classList.toggle('collapsed');
+    if (panel.id) localStorage.setItem('pc-' + panel.id, collapsed ? '1' : '');
+}
+
+function restorePanelStates() {
+    document.querySelectorAll('.panel[id]').forEach(panel => {
+        if (localStorage.getItem('pc-' + panel.id) === '1') togglePanel(panel);
+    });
+}
+
+// ── CRQ show/hide ─────────────────────────────────────────────────────────
+function toggleCrqField(groupId, typeVal) {
+    document.getElementById(groupId).style.display = typeVal === 'Project' ? '' : 'none';
+}
+
 // ── Form submit ───────────────────────────────────────────────────────────
 async function submitAlloc(e) {
     e.preventDefault();
@@ -941,6 +1115,8 @@ async function submitAlloc(e) {
         resource:      document.getElementById('f-resource').value.trim(),
         type:          document.getElementById('f-type').value,
         name:          document.getElementById('f-name').value.trim(),
+        crq_number:    document.getElementById('f-crq').value.trim(),
+        requestor:     document.getElementById('f-requestor').value.trim(),
         start_date:    document.getElementById('f-start').value,
         end_date:      document.getElementById('f-end').value,
         hours_per_day: parseFloat(document.getElementById('f-hours').value),
@@ -973,13 +1149,16 @@ async function submitAlloc(e) {
 
 // ── Edit modal ────────────────────────────────────────────────────────────
 function openEditModal(a) {
-    document.getElementById('e-id').value       = a.id;
-    document.getElementById('e-resource').value = a.resource;
-    document.getElementById('e-type').value     = a.type;
-    document.getElementById('e-name').value     = a.name;
-    document.getElementById('e-start').value    = a.start_date;
-    document.getElementById('e-end').value      = a.end_date;
-    document.getElementById('e-hours').value    = a.hours_per_day;
+    document.getElementById('e-id').value        = a.id;
+    document.getElementById('e-resource').value  = a.resource;
+    document.getElementById('e-type').value      = a.type;
+    document.getElementById('e-name').value      = a.name;
+    document.getElementById('e-crq').value       = a.crq_number || '';
+    document.getElementById('e-requestor').value = a.requestor || '';
+    document.getElementById('e-start').value     = a.start_date;
+    document.getElementById('e-end').value       = a.end_date;
+    document.getElementById('e-hours').value     = a.hours_per_day;
+    toggleCrqField('e-crq-group', a.type);
     document.getElementById('edit-modal').classList.add('open');
 }
 
@@ -999,6 +1178,8 @@ async function submitEdit(e) {
         resource:      document.getElementById('e-resource').value.trim(),
         type:          document.getElementById('e-type').value,
         name:          document.getElementById('e-name').value.trim(),
+        crq_number:    document.getElementById('e-crq').value.trim(),
+        requestor:     document.getElementById('e-requestor').value.trim(),
         start_date:    document.getElementById('e-start').value,
         end_date:      document.getElementById('e-end').value,
         hours_per_day: parseFloat(document.getElementById('e-hours').value),
@@ -1041,6 +1222,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('f-start').value = today;
     document.getElementById('f-end').value   = today;
 
+    restorePanelStates();
     loadDashboard();
     setInterval(loadDashboard, 60000);
 });
@@ -1140,6 +1322,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 resource      = (body.get("resource") or "").strip()
                 atype         = (body.get("type") or "").strip()
                 name          = (body.get("name") or "").strip()
+                crq_number    = (body.get("crq_number") or "").strip()
+                requestor     = (body.get("requestor") or "").strip()
                 start_date    = (body.get("start_date") or "").strip()
                 end_date      = (body.get("end_date") or "").strip()
                 hours_per_day = body.get("hours_per_day")
@@ -1160,9 +1344,9 @@ class APIHandler(BaseHTTPRequestHandler):
                 aid = self.db.new_id("alloc-")
                 self.db.execute(
                     "INSERT INTO allocations "
-                    "(id, resource, type, name, start_date, end_date, hours_per_day, created_at) "
-                    "VALUES (?,?,?,?,?,?,?,?)",
-                    (aid, resource, atype, name, start_date, end_date, hours_per_day,
+                    "(id, resource, type, name, crq_number, requestor, start_date, end_date, hours_per_day, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (aid, resource, atype, name, crq_number, requestor, start_date, end_date, hours_per_day,
                      datetime.now().isoformat()),
                 )
                 self._json({"id": aid, "status": "created"}, 201)
@@ -1184,6 +1368,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 resource      = (body.get("resource") or "").strip()
                 atype         = (body.get("type") or "").strip()
                 name          = (body.get("name") or "").strip()
+                crq_number    = (body.get("crq_number") or "").strip()
+                requestor     = (body.get("requestor") or "").strip()
                 start_date    = (body.get("start_date") or "").strip()
                 end_date      = (body.get("end_date") or "").strip()
                 hours_per_day = body.get("hours_per_day")
@@ -1202,8 +1388,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     return self._json({"error": "hours_per_day must be a positive number"}, 400)
 
                 self.db.execute(
-                    "UPDATE allocations SET resource=?, type=?, name=?, start_date=?, end_date=?, hours_per_day=? WHERE id=?",
-                    (resource, atype, name, start_date, end_date, hours_per_day, aid),
+                    "UPDATE allocations SET resource=?, type=?, name=?, crq_number=?, requestor=?, start_date=?, end_date=?, hours_per_day=? WHERE id=?",
+                    (resource, atype, name, crq_number, requestor, start_date, end_date, hours_per_day, aid),
                 )
                 self._json({"status": "updated"})
             else:
