@@ -276,10 +276,14 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
 .hm-green  { background: rgba(34,197,94,0.72); }
 .hm-amber  { background: rgba(245,158,11,0.72); }
 .hm-over   { background: rgba(239,68,68,0.72); }
-.hm-date-header { font-family: var(--font-mono); font-size: 9px; color: var(--text-muted); writing-mode: vertical-rl; text-orientation: mixed; padding: 4px 2px; white-space: nowrap; }
+.hm-date-header { font-family: var(--font-mono); font-size: 9px; color: var(--text-muted); writing-mode: vertical-rl; text-orientation: mixed; padding: 4px 2px; white-space: nowrap; display: inline-block; }
 .hm-weekend { opacity: 0.4; }
 .hm-today-col .heatmap-cell { outline: 1px solid var(--accent-dim); outline-offset: 1px; }
 .hm-today-col .hm-date-header { color: var(--accent); }
+.hm-highlight { box-shadow: 0 0 0 2px rgba(56,189,248,0.9) !important; opacity: 1 !important; z-index: 5; }
+.hm-dimmed { opacity: 0.1 !important; }
+.stat-card.clickable-filter { cursor: pointer; }
+.stat-card.filter-active { border-color: var(--accent) !important; box-shadow: 0 0 0 1px var(--accent); }
 .hm-tooltip { position: fixed; z-index: 400; background: var(--bg-elevated); border: 1px solid var(--border-active); border-radius: var(--radius-sm); padding: 10px 14px; font-size: 11px; font-family: var(--font-mono); color: var(--text-primary); pointer-events: none; max-width: 240px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
 
 /* Legend */
@@ -527,8 +531,11 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
 
 <script>
 // ── State ────────────────────────────────────────────────────────────────
-let currentView  = 'month';
-let periodOffset = 0;
+let currentView          = 'month';
+let periodOffset         = 0;
+let activeHeatmapFilter  = null;
+let _projectCells        = new Set();
+let _overloadedCells     = new Set();
 const TODAY_STR  = new Date().toISOString().slice(0, 10);
 
 // ── Utilities ────────────────────────────────────────────────────────────
@@ -797,24 +804,45 @@ function renderStats(allocs, ps, pe) {
     });
     const overloaded = Object.values(dailyTotals).reduce((sum, days) => sum + Object.values(days).filter(h => h > 7.4).length, 0);
 
-    const crqCount = new Set(periodAllocs.map(a => a.crq_number).filter(c => c)).size;
+    // Build highlight cell sets for heatmap filter
+    _overloadedCells = new Set();
+    Object.entries(dailyTotals).forEach(([res, days]) => {
+        Object.entries(days).forEach(([date, h]) => { if (h > 7.4) _overloadedCells.add(res + '|' + date); });
+    });
+
+    _projectCells = new Set();
+    periodAllocs.filter(a => a.type === 'Project').forEach(a => {
+        const s0 = a.start_date > ps ? a.start_date : ps;
+        const e0 = a.end_date   < pe ? a.end_date   : pe;
+        const d  = new Date(s0 + 'T00:00:00'), dEnd = new Date(e0 + 'T00:00:00');
+        while (d <= dEnd) {
+            if (d.getDay() !== 0 && d.getDay() !== 6) _projectCells.add(a.resource + '|' + fmtDate(d));
+            d.setDate(d.getDate() + 1);
+        }
+    });
+
+    const projectCount = new Set(periodAllocs.filter(a => a.type === 'Project').map(a => a.name)).size;
 
     const cards = [
-        { l: 'Resources',          v: resources,      c: 'blue',  a: 'a-blue',  sub: 'unique resources'         },
-        { l: 'Allocations',        v: allocs.length,  c: 'blue',  a: 'a-blue',  sub: 'total entries'           },
-        { l: 'Active Today',       v: activePpl,       c: 'purple',a: 'a-purple',sub: 'resources with work'     },
-        { l: 'Overloaded in Period',v: overloaded,     c: overloaded > 0 ? 'red' : 'green',
-          a: overloaded > 0 ? 'a-red' : 'a-green',    sub: '&gt;7.4 hrs on any day'                            },
-        { l: 'CRQs in Period',     v: crqCount,        c: 'purple',a: 'a-purple',sub: 'unique change requests'  },
+        { l: 'Resources',           v: resources,  c: 'blue',  a: 'a-blue',  sub: 'unique resources',        f: null           },
+        { l: 'Allocations',         v: allocs.length, c: 'blue', a: 'a-blue', sub: 'total entries',          f: null           },
+        { l: 'Active Today',        v: activePpl,  c: 'purple',a: 'a-purple',sub: 'resources with work',     f: null           },
+        { l: 'Overloaded in Period',v: overloaded, c: overloaded > 0 ? 'red' : 'green',
+          a: overloaded > 0 ? 'a-red' : 'a-green', sub: '&gt;7.4 hrs on any day',                            f: 'overloaded'   },
+        { l: 'Projects in Period',   v: projectCount,c: 'purple',a: 'a-purple',sub: 'distinct projects',        f: 'project'      },
     ];
 
-    document.getElementById('stats-row').innerHTML = cards.map((c, i) =>
-        `<div class="stat-card ${c.a} anim d${i+1}">
+    document.getElementById('stats-row').innerHTML = cards.map((c, i) => {
+        const isActive  = activeHeatmapFilter === c.f && c.f !== null;
+        const clickable = c.f ? 'clickable-filter' : '';
+        const active    = isActive ? 'filter-active' : '';
+        const onclick   = c.f ? `onclick="setHeatmapFilter('${c.f}')"` : '';
+        return `<div class="stat-card ${c.a} ${clickable} ${active} anim d${i+1}" ${onclick}>
             <div class="stat-label">${c.l}</div>
             <div class="stat-value ${c.c}">${c.v}</div>
             <div class="stat-sub">${c.sub}</div>
-        </div>`
-    ).join('');
+        </div>`;
+    }).join('');
 }
 
 // ── Workload charts ───────────────────────────────────────────────────────
@@ -932,8 +960,18 @@ function renderHeatmap(data) {
     // Reset loading styles so position:sticky works correctly inside the table
     container.style.cssText = '';
 
+    const isQuarter  = currentView === 'quarter';
+    const spacingPx  = isQuarter ? 1 : 2;
+    const weekendPx  = isQuarter ? 3 : 5;
+    const labelW     = 120;
+    const available  = (container.closest('.heatmap-wrap') || container).clientWidth - labelW - 24;
+    const weekendCount  = data.dates.filter(ds => { const d = new Date(ds+'T00:00:00'); return d.getDay()===0||d.getDay()===6; }).length;
+    const weekdayCount  = data.dates.length - weekendCount;
+    const cellPx     = Math.min(28, Math.max(10, Math.floor((available - weekendPx * weekendCount - spacingPx * data.dates.length) / weekdayCount)));
+
     const table = document.createElement('table');
     table.className = 'heatmap-table';
+    if (isQuarter) table.style.borderSpacing = spacingPx + 'px';
 
     // Header row
     const thead = document.createElement('thead');
@@ -950,17 +988,23 @@ function renderHeatmap(data) {
 
     data.dates.forEach(dateStr => {
         const th = document.createElement('th');
-        th.style.padding = '0 1px';
+        th.style.padding = '0';
         const d = new Date(dateStr + 'T00:00:00');
         const dow = d.getDay();
         const isWeekend = dow === 0 || dow === 6;
         const isToday   = dateStr === TODAY_STR;
-        const label = document.createElement('div');
-        label.className = 'hm-date-header' + (isWeekend ? ' hm-weekend' : '');
-        if (isWeekend) { th.style.opacity = '0.35'; }
-        if (isToday) label.style.color = 'var(--accent)';
-        label.textContent = d.getDate() + ' ' + d.toLocaleDateString('en-GB', { weekday: 'short' });
-        th.appendChild(label);
+        th.style.textAlign = 'center';
+        if (isWeekend) { th.style.opacity = '0.35'; th.style.width = weekendPx + 'px'; th.style.maxWidth = weekendPx + 'px'; }
+        // No label on weekends; quarter view only labels Mondays
+        if (!isWeekend && (!isQuarter || dow === 1)) {
+            const label = document.createElement('div');
+            label.className = 'hm-date-header';
+            if (isToday) label.style.color = 'var(--accent)';
+            label.textContent = isQuarter
+                ? d.getDate() + '/' + (d.getMonth()+1)
+                : d.getDate() + ' ' + d.toLocaleDateString('en-GB', { weekday: 'short' });
+            th.appendChild(label);
+        }
         if (isToday) th.classList.add('hm-today-col');
         headerRow.appendChild(th);
     });
@@ -994,9 +1038,14 @@ function renderHeatmap(data) {
 
             const cell = document.createElement('div');
             cell.className = 'heatmap-cell ' + (isWeekend ? 'hm-empty' : getHeatClass(hours));
-            if (isWeekend) cell.style.opacity = '0.3';
+            const thisCellPx = isWeekend ? weekendPx : cellPx;
+            cell.style.width = thisCellPx + 'px';
+            cell.style.height = (isQuarter ? cellPx : 28) + 'px';
+            cell.style.borderRadius = isQuarter ? '2px' : '3px';
+            if (isWeekend) cell.style.opacity = '0.25';
             if (isToday) cell.style.outline = '1px solid var(--accent-dim)';
 
+            cell.dataset.hmKey = resource + '|' + dateStr;
             cell.addEventListener('mouseenter', ev => showTooltip(ev, resource, dateStr, hours, names));
             cell.addEventListener('mouseleave', hideTooltip);
             cell.addEventListener('mousemove',  moveTooltip);
@@ -1011,6 +1060,7 @@ function renderHeatmap(data) {
     table.appendChild(tbody);
     container.innerHTML = '';
     container.appendChild(table);
+    applyHeatmapFilter();
 }
 
 // ── Tooltip ───────────────────────────────────────────────────────────────
@@ -1089,6 +1139,31 @@ async function loadAllocations() {
             '</td>' +
             '</tr>';
     }).join('');
+}
+
+// ── Heatmap filter ────────────────────────────────────────────────────────
+function setHeatmapFilter(filter) {
+    activeHeatmapFilter = activeHeatmapFilter === filter ? null : filter;
+    applyHeatmapFilter();
+    // Refresh stat cards to update active state without full reload
+    document.querySelectorAll('.stat-card.clickable-filter').forEach(card => {
+        const f = card.getAttribute('onclick').match(/'(\w+)'/)?.[1];
+        card.classList.toggle('filter-active', f === activeHeatmapFilter);
+    });
+}
+
+function applyHeatmapFilter() {
+    const cells = document.querySelectorAll('[data-hm-key]');
+    if (!activeHeatmapFilter) {
+        cells.forEach(c => { c.classList.remove('hm-highlight', 'hm-dimmed'); });
+        return;
+    }
+    const activeSet = activeHeatmapFilter === 'project' ? _projectCells : _overloadedCells;
+    cells.forEach(c => {
+        const match = activeSet.has(c.dataset.hmKey);
+        c.classList.toggle('hm-highlight', match);
+        c.classList.toggle('hm-dimmed',    !match);
+    });
 }
 
 // ── Panel collapse ────────────────────────────────────────────────────────
