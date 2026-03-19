@@ -17,6 +17,7 @@ import sys
 import sqlite3
 import threading
 import uuid
+import secrets
 import logging
 import argparse
 from datetime import datetime, timedelta, date
@@ -75,9 +76,20 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_alloc_resource ON allocations(resource);
             CREATE INDEX IF NOT EXISTS idx_alloc_dates    ON allocations(start_date, end_date);
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
         """)
         c.commit()
         self._migrate(c)
+        # auto-generate API key on first run if not already set
+        row = c.execute("SELECT value FROM settings WHERE key='api_key'").fetchone()
+        if not row:
+            import secrets as _secrets
+            c.execute("INSERT INTO settings (key, value) VALUES ('api_key', ?)",
+                      (_secrets.token_hex(24),))
+            c.commit()
         c.close()
 
     def _migrate(self, c):
@@ -315,6 +327,11 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
     <div class="topbar-status">
         <div style="display:flex;align-items:center;gap:6px"><div class="status-dot"></div><span>ONLINE</span></div>
         <span id="clock"></span>
+        <button class="btn btn-sm" onclick="openSettings()" title="Settings" style="padding:4px 8px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+        </button>
     </div>
 </div>
 
@@ -367,7 +384,7 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
             <span id="charts-period-label" style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted)"></span>
         </div>
         <div class="panel-body" style="display:flex;justify-content:center;gap:56px;flex-wrap:wrap;align-items:flex-start;padding:20px 24px">
-            <div style="flex:0 1 280px">
+            <div style="flex:0 1 340px">
                 <div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:16px;text-align:center">Project vs BAU — Allocation Count</div>
                 <div id="chart-donut" style="display:flex;align-items:center;justify-content:center;gap:32px"></div>
             </div>
@@ -388,6 +405,7 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
                 <thead><tr>
                     <th>Resource</th>
                     <th>Type</th>
+                    <th>CRQ #</th>
                     <th>Name</th>
                     <th>Start</th>
                     <th>End</th>
@@ -529,13 +547,42 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
     </div>
 </div>
 
+<!-- ====== SETTINGS MODAL ====== -->
+<div class="modal-overlay" id="settings-modal">
+    <div class="modal" style="width:480px">
+        <div class="modal-head">
+            <h3>Settings</h3>
+            <button class="modal-close" onclick="closeSettings()">&#10005;</button>
+        </div>
+        <div class="modal-body">
+            <div style="margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">API Key</div>
+            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:12px">Required in the <code style="font-family:var(--font-mono);color:var(--accent)">X-API-Key</code> header or <code style="font-family:var(--font-mono);color:var(--accent)">?api_key=</code> query param to access <code style="font-family:var(--font-mono);color:var(--accent)">/api/stats</code>.</div>
+            <div style="display:flex;gap:8px;align-items:center">
+                <input class="form-input" id="api-key-display" type="text" readonly style="font-family:var(--font-mono);font-size:12px;flex:1;cursor:text" placeholder="No key generated yet">
+                <button class="btn btn-sm" onclick="copyApiKey()" title="Copy">Copy</button>
+            </div>
+            <div style="margin-top:14px">
+                <button class="btn btn-danger btn-sm" onclick="generateApiKey()">&#8635; Regenerate Key</button>
+                <span style="font-size:10px;color:var(--text-muted);margin-left:10px">Existing integrations will need updating.</span>
+            </div>
+        </div>
+        <div class="modal-foot">
+            <button class="btn" onclick="closeSettings()">Close</button>
+        </div>
+    </div>
+</div>
+
 <script>
 // ── State ────────────────────────────────────────────────────────────────
 let currentView          = 'month';
 let periodOffset         = 0;
 let activeHeatmapFilter  = null;
 let _projectCells        = new Set();
+let _bauCells            = new Set();
 let _overloadedCells     = new Set();
+let _periodAllocsData    = [];
+let _periodStart         = '';
+let _periodEnd           = '';
 const TODAY_STR  = new Date().toISOString().slice(0, 10);
 
 // ── Utilities ────────────────────────────────────────────────────────────
@@ -752,14 +799,23 @@ function renderSynopsis(data) {
 
 // ── Period allocations table ──────────────────────────────────────────────
 function renderPeriodTable(allocs, startStr, endStr) {
-    const inPeriod = allocs.filter(a => a.start_date <= endStr && a.end_date >= startStr);
+    _periodAllocsData = allocs;
+    _periodStart      = startStr;
+    _periodEnd        = endStr;
+    _renderPeriodTable();
+}
+
+function _renderPeriodTable() {
+    let inPeriod = _periodAllocsData.filter(a => a.start_date <= _periodEnd && a.end_date >= _periodStart);
+    if (activeHeatmapFilter === 'project') inPeriod = inPeriod.filter(a => a.type === 'Project');
+    else if (activeHeatmapFilter === 'bau') inPeriod = inPeriod.filter(a => a.type === 'BAU');
     inPeriod.sort((a, b) => a.start_date.localeCompare(b.start_date) || a.resource.localeCompare(b.resource));
 
     document.getElementById('period-alloc-count').textContent = inPeriod.length;
     const tbody = document.getElementById('period-alloc-body');
 
     if (inPeriod.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px">No allocations in this period.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">No allocations in this period.</td></tr>';
         return;
     }
 
@@ -770,6 +826,7 @@ function renderPeriodTable(allocs, startStr, endStr) {
         return '<tr>' +
             '<td class="fname">' + escHtml(a.resource) + '</td>' +
             '<td>' + typePill + '</td>' +
+            '<td>' + escHtml(a.crq_number || '') + '</td>' +
             '<td>' + escHtml(a.name) + '</td>' +
             '<td>' + a.start_date + '</td>' +
             '<td>' + a.end_date + '</td>' +
@@ -821,15 +878,28 @@ function renderStats(allocs, ps, pe) {
         }
     });
 
+    _bauCells = new Set();
+    periodAllocs.filter(a => a.type === 'BAU').forEach(a => {
+        const s0 = a.start_date > ps ? a.start_date : ps;
+        const e0 = a.end_date   < pe ? a.end_date   : pe;
+        const d  = new Date(s0 + 'T00:00:00'), dEnd = new Date(e0 + 'T00:00:00');
+        while (d <= dEnd) {
+            if (d.getDay() !== 0 && d.getDay() !== 6) _bauCells.add(a.resource + '|' + fmtDate(d));
+            d.setDate(d.getDate() + 1);
+        }
+    });
+
     const projectCount = new Set(periodAllocs.filter(a => a.type === 'Project').map(a => a.name)).size;
+    const bauCount2    = new Set(periodAllocs.filter(a => a.type === 'BAU').map(a => a.name)).size;
 
     const cards = [
-        { l: 'Resources',           v: resources,  c: 'blue',  a: 'a-blue',  sub: 'unique resources',        f: null           },
-        { l: 'Allocations',         v: allocs.length, c: 'blue', a: 'a-blue', sub: 'total entries',          f: null           },
-        { l: 'Active Today',        v: activePpl,  c: 'purple',a: 'a-purple',sub: 'resources with work',     f: null           },
-        { l: 'Overloaded in Period',v: overloaded, c: overloaded > 0 ? 'red' : 'green',
-          a: overloaded > 0 ? 'a-red' : 'a-green', sub: '&gt;7.4 hrs on any day',                            f: 'overloaded'   },
-        { l: 'Projects in Period',   v: projectCount,c: 'purple',a: 'a-purple',sub: 'distinct projects',        f: 'project'      },
+        { l: 'Resources',           v: resources,    c: 'blue',  a: 'a-blue',  sub: 'unique resources',    f: null        },
+        { l: 'Allocations',         v: allocs.length,c: 'blue',  a: 'a-blue',  sub: 'total entries',       f: null        },
+        { l: 'Active Today',        v: activePpl,    c: 'purple',a: 'a-purple',sub: 'resources with work',  f: null        },
+        { l: 'Overloaded in Period',v: overloaded,   c: overloaded > 0 ? 'red' : 'green',
+          a: overloaded > 0 ? 'a-red' : 'a-green',  sub: '&gt;7.4 hrs on any day',                         f: 'overloaded'},
+        { l: 'Projects in Period',  v: projectCount, c: 'purple',a: 'a-purple',sub: 'distinct projects',   f: 'project'   },
+        { l: 'BAU in Period',       v: bauCount2,    c: 'amber', a: 'a-amber', sub: 'distinct BAU items',  f: 'bau'       },
     ];
 
     document.getElementById('stats-row').innerHTML = cards.map((c, i) => {
@@ -875,8 +945,8 @@ function renderCharts(allocs, ps, pe) {
 
     const projAngle = total > 0 ? (projCount / total) * 2 * Math.PI : 0;
     const projPct   = total > 0 ? Math.round(projCount / total * 100) : 0;
-    const cx = 100, cy = 100, r = 76, ir = 46;
-    let donutSvg = `<svg viewBox="0 0 200 200" width="200" height="200">`;
+    const cx = 130, cy = 130, r = 99, ir = 60;
+    let donutSvg = `<svg viewBox="0 0 260 260" width="260" height="260">`;
     if (projCount > 0 && bauCount > 0) {
         donutSvg += donutArc(cx,cy,r,ir, 0, projAngle, '#38bdf8');
         donutSvg += donutArc(cx,cy,r,ir, projAngle, 2*Math.PI, '#f59e0b');
@@ -884,8 +954,8 @@ function renderCharts(allocs, ps, pe) {
         donutSvg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${projCount > 0 ? '#38bdf8' : '#f59e0b'}"/>`;
         donutSvg += `<circle cx="${cx}" cy="${cy}" r="${ir}" fill="#10151e"/>`;
     }
-    donutSvg += `<text x="${cx}" y="${cy-7}" text-anchor="middle" fill="#e2e8f0" font-size="24" font-weight="700" font-family="JetBrains Mono,monospace">${total}</text>`;
-    donutSvg += `<text x="${cx}" y="${cy+13}" text-anchor="middle" fill="#8b99ad" font-size="10" font-family="Outfit,sans-serif">allocations</text>`;
+    donutSvg += `<text x="${cx}" y="${cy-8}" text-anchor="middle" fill="#e2e8f0" font-size="28" font-weight="700" font-family="JetBrains Mono,monospace">${total}</text>`;
+    donutSvg += `<text x="${cx}" y="${cy+14}" text-anchor="middle" fill="#8b99ad" font-size="12" font-family="Outfit,sans-serif">allocations</text>`;
     donutSvg += `</svg>`;
 
     const legend = `<div style="display:flex;flex-direction:column;gap:10px;justify-content:center">
@@ -1156,14 +1226,17 @@ function applyHeatmapFilter() {
     const cells = document.querySelectorAll('[data-hm-key]');
     if (!activeHeatmapFilter) {
         cells.forEach(c => { c.classList.remove('hm-highlight', 'hm-dimmed'); });
-        return;
+    } else {
+        const activeSet = activeHeatmapFilter === 'project' ? _projectCells
+                        : activeHeatmapFilter === 'bau'     ? _bauCells
+                        : _overloadedCells;
+        cells.forEach(c => {
+            const match = activeSet.has(c.dataset.hmKey);
+            c.classList.toggle('hm-highlight', match);
+            c.classList.toggle('hm-dimmed',    !match);
+        });
     }
-    const activeSet = activeHeatmapFilter === 'project' ? _projectCells : _overloadedCells;
-    cells.forEach(c => {
-        const match = activeSet.has(c.dataset.hmKey);
-        c.classList.toggle('hm-highlight', match);
-        c.classList.toggle('hm-dimmed',    !match);
-    });
+    if (_periodAllocsData.length > 0) _renderPeriodTable();
 }
 
 // ── Panel collapse ────────────────────────────────────────────────────────
@@ -1288,6 +1361,38 @@ async function deleteAlloc(id) {
     }
 }
 
+// ── Settings ──────────────────────────────────────────────────────────────
+async function openSettings() {
+    const data = await api('/api/settings/apikey');
+    document.getElementById('api-key-display').value = (data && data.api_key) ? data.api_key : '';
+    document.getElementById('settings-modal').classList.add('open');
+}
+
+function closeSettings() {
+    document.getElementById('settings-modal').classList.remove('open');
+}
+
+async function generateApiKey() {
+    if (!confirm('Regenerate API key? Any existing integrations will stop working until updated.')) return;
+    const data = await api('/api/settings/apikey', { method: 'POST' });
+    if (data && data.api_key) {
+        document.getElementById('api-key-display').value = data.api_key;
+        toast('New API key generated', 'success');
+    } else {
+        toast('Failed to generate key', 'error');
+    }
+}
+
+function copyApiKey() {
+    const val = document.getElementById('api-key-display').value;
+    if (!val) return;
+    navigator.clipboard.writeText(val).then(() => toast('Copied to clipboard', 'info'));
+}
+
+document.getElementById('settings-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('settings-modal')) closeSettings();
+});
+
 // ── Init ──────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     const username = getUsername();
@@ -1380,6 +1485,62 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path == "/api/heatmap":
                 self._json(self._get_heatmap(params))
 
+            elif path == "/api/settings/apikey":
+                row = self.db.fetchone("SELECT value FROM settings WHERE key='api_key'")
+                self._json({"api_key": row["value"] if row else None})
+
+            elif path == "/api/stats":
+                # enforce API key if one is set
+                row = self.db.fetchone("SELECT value FROM settings WHERE key='api_key'")
+                if row:
+                    provided = (
+                        params.get("api_key", [None])[0] or
+                        self.headers.get("X-API-Key", "")
+                    )
+                    if provided != row["value"]:
+                        return self._json({"error": "Unauthorized"}, 401)
+                today = date.today().isoformat()
+                active_resources = self.db.fetchone(
+                    "SELECT COUNT(DISTINCT resource) AS n FROM allocations "
+                    "WHERE start_date <= ? AND end_date >= ?", (today, today)
+                )["n"]
+                active_projects = self.db.fetchone(
+                    "SELECT COUNT(*) AS n FROM allocations "
+                    "WHERE type='Project' AND start_date <= ? AND end_date >= ?", (today, today)
+                )["n"]
+                BAU_requests = self.db.fetchone(
+                    "SELECT COUNT(*) AS n FROM allocations "
+                    "WHERE type='BAU' AND start_date <= ? AND end_date >= ?", (today, today)
+                )["n"]
+                total_allocations_today = self.db.fetchone(
+                    "SELECT COUNT(*) AS n FROM allocations "
+                    "WHERE start_date <= ? AND end_date >= ?", (today, today)
+                )["n"]
+                total_hours_today = self.db.fetchone(
+                    "SELECT COALESCE(SUM(hours_per_day), 0) AS n FROM allocations "
+                    "WHERE start_date <= ? AND end_date >= ?", (today, today)
+                )["n"]
+                # resources with allocations today grouped by total hours
+                resource_hours = self.db.fetchall(
+                    "SELECT resource, SUM(hours_per_day) AS total FROM allocations "
+                    "WHERE start_date <= ? AND end_date >= ? GROUP BY resource", (today, today)
+                )
+                all_resources = self.db.fetchall(
+                    "SELECT DISTINCT resource FROM allocations ORDER BY resource"
+                )
+                active_today = {r["resource"] for r in resource_hours}
+                available_resources = sum(1 for r in all_resources if r["resource"] not in active_today)
+                overloaded_resources = sum(1 for r in resource_hours if r["total"] > 7.4)
+                self._json({
+                    "active_resources":      active_resources,
+                    "active_projects":       active_projects,
+                    "BAU_requests":          BAU_requests,
+                    "total_allocations_today": total_allocations_today,
+                    "total_hours_today":     round(total_hours_today, 1),
+                    "available_resources":   available_resources,
+                    "overloaded_resources":  overloaded_resources,
+                })
+
             else:
                 self._json({"error": "Not found"}, 404)
 
@@ -1392,7 +1553,16 @@ class APIHandler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             path   = parsed.path.rstrip("/")
 
-            if path == "/api/allocations":
+            if path == "/api/settings/apikey":
+                new_key = secrets.token_hex(24)
+                self.db.execute(
+                    "INSERT INTO settings (key, value) VALUES ('api_key', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (new_key,)
+                )
+                self._json({"api_key": new_key})
+
+            elif path == "/api/allocations":
                 body = self._read_body()
                 resource      = (body.get("resource") or "").strip()
                 atype         = (body.get("type") or "").strip()
