@@ -80,6 +80,15 @@ class Database:
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS holidays (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date   TEXT NOT NULL,
+                type       TEXT NOT NULL DEFAULT 'Holiday',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_hol_dates ON holidays(start_date, end_date);
         """)
         c.commit()
         self._migrate(c)
@@ -294,6 +303,7 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
 .hm-today-col .hm-date-header { color: var(--accent); }
 .hm-highlight { box-shadow: 0 0 0 2px rgba(56,189,248,0.9) !important; opacity: 1 !important; z-index: 5; }
 .hm-dimmed { opacity: 0.1 !important; }
+.hm-holiday { background: rgba(139,92,246,0.72); }
 .stat-card.clickable-filter { cursor: pointer; }
 .stat-card.filter-active { border-color: var(--accent) !important; box-shadow: 0 0 0 1px var(--accent); }
 .hm-tooltip { position: fixed; z-index: 400; background: var(--bg-elevated); border: 1px solid var(--border-active); border-radius: var(--radius-sm); padding: 10px 14px; font-size: 11px; font-family: var(--font-mono); color: var(--text-primary); pointer-events: none; max-width: 240px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
@@ -306,6 +316,25 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
     .form-grid { grid-template-columns: 1fr; }
     .stats-row { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Calendar */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-header-cell { text-align: center; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); padding: 6px 0; }
+.cal-day { min-height: 74px; background: var(--bg-secondary); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 6px 7px; transition: var(--transition); }
+.cal-day:hover { border-color: var(--border-active); background: var(--bg-elevated); }
+.cal-day.cal-today { border-color: var(--accent-dim); }
+.cal-day.cal-other-month { opacity: 0.3; }
+.cal-day.cal-weekend { background: rgba(56,189,248,0.015); }
+.cal-day-num { font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
+.cal-today .cal-day-num { color: var(--accent); }
+.cal-event { font-size: 9px; font-weight: 600; padding: 1px 5px; border-radius: 3px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-event-holiday { background: rgba(139,92,246,0.2); color: var(--info); }
+.cal-event-halfam   { background: rgba(245,158,11,0.2); color: var(--warning); }
+.cal-event-halfpm   { background: rgba(251,146,60,0.2); color: #fb923c; }
+.cal-event-medical  { background: rgba(239,68,68,0.2); color: var(--danger); }
+.cal-event-bank     { background: rgba(34,197,94,0.15); color: var(--success); }
+.cal-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.cal-nav-title { font-size: 14px; font-weight: 700; color: var(--text-primary); font-family: var(--font-mono); }
 </style>
 </head>
 <body>
@@ -323,6 +352,7 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
     <div class="topbar-nav">
         <button class="nav-btn active" data-page="dashboard">Dashboard</button>
         <button class="nav-btn" data-page="requests">Resource Requests</button>
+        <button class="nav-btn" data-page="holidays">Holidays</button>
     </div>
     <div class="topbar-status">
         <div style="display:flex;align-items:center;gap:6px"><div class="status-dot"></div><span>ONLINE</span></div>
@@ -366,6 +396,7 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
                 <span class="hm-legend-cell hm-green" style="margin-left:6px"></span> 4–6h
                 <span class="hm-legend-cell hm-amber" style="margin-left:6px"></span> 6–7.4h
                 <span class="hm-legend-cell hm-over" style="margin-left:6px"></span> &gt;7.4h (overloaded)
+                <span class="hm-legend-cell hm-holiday" style="margin-left:6px"></span> On Leave
             </div>
         </div>
     </div>
@@ -493,6 +524,60 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
     </div>
 </div>
 
+<!-- ====== HOLIDAYS PAGE ====== -->
+<div class="page" id="page-holidays">
+    <div class="panel anim d1" id="panel-calendar">
+        <div class="panel-header" onclick="togglePanel(this.closest('.panel'))">
+            <div class="panel-title">Calendar <span class="panel-chevron">▾</span></div>
+            <button class="btn btn-sm" onclick="event.stopPropagation();openAddHoliday()">+ Add Holiday</button>
+        </div>
+        <div class="panel-body">
+            <div class="cal-nav">
+                <button class="btn btn-sm" onclick="calPrev()">&#8249;</button>
+                <div class="cal-nav-title" id="cal-title"></div>
+                <button class="btn btn-sm" onclick="calNext()">&#8250;</button>
+            </div>
+            <div class="cal-grid">
+                <div class="cal-header-cell">Mon</div>
+                <div class="cal-header-cell">Tue</div>
+                <div class="cal-header-cell">Wed</div>
+                <div class="cal-header-cell">Thu</div>
+                <div class="cal-header-cell">Fri</div>
+                <div class="cal-header-cell">Sat</div>
+                <div class="cal-header-cell">Sun</div>
+            </div>
+            <div class="cal-grid" id="cal-body" style="margin-top:4px"></div>
+            <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:10px;font-family:var(--font-mono);color:var(--text-muted);align-items:center">
+                <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:rgba(139,92,246,0.3);display:inline-block"></span>Holiday</span>
+                <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:rgba(245,158,11,0.3);display:inline-block"></span>Half Day AM</span>
+                <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:rgba(251,146,60,0.3);display:inline-block"></span>Half Day PM</span>
+                <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:rgba(239,68,68,0.3);display:inline-block"></span>Medical</span>
+                <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:rgba(34,197,94,0.2);display:inline-block"></span>UK Bank Holiday</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel anim d2">
+        <div class="panel-header" onclick="togglePanel(this.closest('.panel'))">
+            <div class="panel-title">Holiday List <span class="panel-chevron">▾</span></div>
+            <span class="panel-badge" id="hol-count">—</span>
+        </div>
+        <div class="panel-body" style="padding:0;overflow-x:auto">
+            <table class="data-table">
+                <thead><tr>
+                    <th>Person</th>
+                    <th>Type</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Working Days</th>
+                    <th></th>
+                </tr></thead>
+                <tbody id="hol-body"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
 <!-- ====== EDIT MODAL ====== -->
 <div class="modal-overlay" id="edit-modal">
     <div class="modal">
@@ -565,9 +650,80 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
                 <button class="btn btn-danger btn-sm" onclick="generateApiKey()">&#8635; Regenerate Key</button>
                 <span style="font-size:10px;color:var(--text-muted);margin-left:10px">Existing integrations will need updating.</span>
             </div>
+
+            <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-subtle)">
+                <div style="margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Display Name</div>
+                <div style="font-size:11px;color:var(--text-secondary);margin-bottom:12px">Pre-fills the Person field on new allocations and holidays.</div>
+                <div style="display:flex;gap:8px;align-items:center">
+                    <input class="form-input" id="settings-username" type="text" style="flex:1" placeholder="Your name">
+                    <button class="btn btn-sm" onclick="saveUsername()">Save</button>
+                </div>
+            </div>
+
+            <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-subtle)">
+                <div style="margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Bank Holidays</div>
+                <div style="font-size:11px;color:var(--text-secondary);margin-bottom:14px">Source for UK bank holidays shown on the Holidays calendar.</div>
+                <div class="form-group" style="margin-bottom:10px">
+                    <label class="form-label">Endpoint URL</label>
+                    <input class="form-input" id="bh-url" type="text" style="font-family:var(--font-mono);font-size:11px" placeholder="https://www.gov.uk/bank-holidays.json">
+                </div>
+                <div class="form-group" style="margin-bottom:14px">
+                    <label class="form-label">Region</label>
+                    <select class="form-select" id="bh-division">
+                        <option value="england-and-wales">England &amp; Wales</option>
+                        <option value="scotland">Scotland</option>
+                        <option value="northern-ireland">Northern Ireland</option>
+                    </select>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                    <button class="btn btn-sm" onclick="saveBankHolSettings()">Save</button>
+                    <button class="btn btn-sm" onclick="refreshBankHols()">&#8635; Refresh Now</button>
+                    <span id="bh-status" style="font-size:10px;color:var(--text-muted);font-family:var(--font-mono)"></span>
+                </div>
+            </div>
         </div>
         <div class="modal-foot">
             <button class="btn" onclick="closeSettings()">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- ====== ADD HOLIDAY MODAL ====== -->
+<div class="modal-overlay" id="add-holiday-modal">
+    <div class="modal" style="width:480px">
+        <div class="modal-head">
+            <h3>Add Holiday</h3>
+            <button class="modal-close" onclick="closeAddHoliday()">&#10005;</button>
+        </div>
+        <div class="modal-body">
+            <form class="form-grid" id="holiday-form" onsubmit="submitHoliday(event)">
+                <input type="hidden" id="h-id">
+                <div class="form-group full">
+                    <label class="form-label">Person</label>
+                    <input class="form-input" id="h-name" type="text" placeholder="Person name" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Start Date</label>
+                    <input class="form-input" id="h-start" type="date" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">End Date</label>
+                    <input class="form-input" id="h-end" type="date" required>
+                </div>
+                <div class="form-group full">
+                    <label class="form-label">Type</label>
+                    <select class="form-select" id="h-type" required>
+                        <option value="Holiday">Holiday</option>
+                        <option value="Half Day AM">Half Day AM</option>
+                        <option value="Half Day PM">Half Day PM</option>
+                        <option value="Medical">Medical</option>
+                    </select>
+                </div>
+            </form>
+        </div>
+        <div class="modal-foot">
+            <button class="btn" onclick="closeAddHoliday()">Cancel</button>
+            <button class="btn btn-primary" id="hol-submit-btn" onclick="document.getElementById('holiday-form').requestSubmit()">Add Holiday</button>
         </div>
     </div>
 </div>
@@ -580,6 +736,7 @@ let activeHeatmapFilter  = null;
 let _projectCells        = new Set();
 let _bauCells            = new Set();
 let _overloadedCells     = new Set();
+let _leaveCells          = new Set();
 let _periodAllocsData    = [];
 let _periodStart         = '';
 let _periodEnd           = '';
@@ -644,6 +801,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
         document.getElementById('page-' + btn.dataset.page).classList.add('active');
         if (btn.dataset.page === 'dashboard') loadDashboard();
         if (btn.dataset.page === 'requests')  loadAllocations();
+        if (btn.dataset.page === 'holidays')  loadHolidays();
     });
 });
 
@@ -706,7 +864,8 @@ async function loadDashboard() {
         api('/api/allocations'),
     ]);
 
-    if (allocs)   renderStats(allocs, s, e2);
+    const holData = (heatData && heatData.holidays) || {};
+    if (allocs)   renderStats(allocs, s, e2, holData);
     if (heatData) renderHeatmap(heatData);
     if (heatData) renderSynopsis(heatData);
     if (allocs)   renderPeriodTable(allocs, s, e2);
@@ -836,13 +995,38 @@ function _renderPeriodTable() {
 }
 
 // ── Stat cards ────────────────────────────────────────────────────────────
-function renderStats(allocs, ps, pe) {
-    const resources  = new Set(allocs.map(a => a.resource)).size;
-    const today      = TODAY_STR;
-    const periodAllocs = allocs.filter(a => a.start_date <= pe && a.end_date >= ps);
+function renderStats(allocs, ps, pe, holData = {}) {
+    const allocResources = new Set(allocs.map(a => a.resource));
+    const holResources   = new Set(Object.keys(holData));
+    const allResources   = new Set([...allocResources, ...holResources]);
+    const resources      = allResources.size;
+    const today          = TODAY_STR;
+    const periodAllocs   = allocs.filter(a => a.start_date <= pe && a.end_date >= ps);
 
-    // Active: resources with at least one allocation in period
-    const activePpl = new Set(periodAllocs.map(a => a.resource)).size;
+    // On leave today — resources with a holiday covering today
+    const onLeaveToday = new Set(
+        Object.entries(holData).filter(([, days]) => days[today]).map(([r]) => r)
+    );
+
+    // Active: resources with at least one non-holiday working day with an allocation in period
+    const activeResSet = new Set(periodAllocs.map(a => a.resource));
+    let activePpl = 0;
+    activeResSet.forEach(res => {
+        const resAllocs = periodAllocs.filter(a => a.resource === res);
+        let hasWorkDay = false;
+        for (const a of resAllocs) {
+            const s0 = a.start_date > ps ? a.start_date : ps;
+            const e0 = a.end_date   < pe ? a.end_date   : pe;
+            const d = new Date(s0 + 'T00:00:00'), dEnd = new Date(e0 + 'T00:00:00');
+            while (d <= dEnd) {
+                const ds = fmtDate(d), dow = d.getDay();
+                if (dow !== 0 && dow !== 6 && !(holData[res] && holData[res][ds])) { hasWorkDay = true; break; }
+                d.setDate(d.getDate() + 1);
+            }
+            if (hasWorkDay) break;
+        }
+        if (hasWorkDay) activePpl++;
+    });
 
     // Overloaded: resources with any day >7.4h total in period
     const dailyTotals = {};
@@ -859,12 +1043,27 @@ function renderStats(allocs, ps, pe) {
             d.setDate(d.getDate() + 1);
         }
     });
-    const overloaded = Object.values(dailyTotals).reduce((sum, days) => sum + Object.values(days).filter(h => h > 7.4).length, 0);
+    // Exclude holiday days from overloaded calculation
+    const overloaded = Object.entries(dailyTotals).reduce((sum, [res, days]) => {
+        return sum + Object.entries(days).filter(([ds, h]) =>
+            h > 7.4 && !(holData[res] && holData[res][ds])
+        ).length;
+    }, 0);
 
     // Build highlight cell sets for heatmap filter
     _overloadedCells = new Set();
     Object.entries(dailyTotals).forEach(([res, days]) => {
-        Object.entries(days).forEach(([date, h]) => { if (h > 7.4) _overloadedCells.add(res + '|' + date); });
+        Object.entries(days).forEach(([ds, h]) => {
+            if (h > 7.4 && !(holData[res] && holData[res][ds])) _overloadedCells.add(res + '|' + ds);
+        });
+    });
+
+    _leaveCells = new Set();
+    Object.entries(holData).forEach(([res, days]) => {
+        Object.keys(days).forEach(ds => {
+            const dow = new Date(ds + 'T00:00:00').getDay();
+            if (dow !== 0 && dow !== 6) _leaveCells.add(res + '|' + ds);
+        });
     });
 
     _projectCells = new Set();
@@ -893,13 +1092,18 @@ function renderStats(allocs, ps, pe) {
     const bauCount2    = new Set(periodAllocs.filter(a => a.type === 'BAU').map(a => a.name)).size;
 
     const cards = [
-        { l: 'Resources',           v: resources,    c: 'blue',  a: 'a-blue',  sub: 'unique resources',    f: null        },
-        { l: 'Allocations',         v: allocs.length,c: 'blue',  a: 'a-blue',  sub: 'total entries',       f: null        },
-        { l: 'Active Today',        v: activePpl,    c: 'purple',a: 'a-purple',sub: 'resources with work',  f: null        },
-        { l: 'Overloaded in Period',v: overloaded,   c: overloaded > 0 ? 'red' : 'green',
-          a: overloaded > 0 ? 'a-red' : 'a-green',  sub: '&gt;7.4 hrs on any day',                         f: 'overloaded'},
-        { l: 'Projects in Period',  v: projectCount, c: 'purple',a: 'a-purple',sub: 'distinct projects',   f: 'project'   },
-        { l: 'BAU in Period',       v: bauCount2,    c: 'amber', a: 'a-amber', sub: 'distinct BAU items',  f: 'bau'       },
+        { l: 'Resources',           v: resources,         c: 'blue',  a: 'a-blue',  sub: 'unique resources',      f: null        },
+        { l: 'Allocations',         v: allocs.length,     c: 'blue',  a: 'a-blue',  sub: 'total entries',         f: null        },
+        { l: 'Active in Period',    v: activePpl,
+          c: resources === 0 || activePpl === resources ? 'blue' : (resources - activePpl) / resources < 0.5 ? 'amber' : 'red',
+          a: resources === 0 || activePpl === resources ? 'a-blue' : (resources - activePpl) / resources < 0.5 ? 'a-amber' : 'a-red',
+          sub: 'resources with work', f: null },
+        { l: 'On Leave in Period',   v: onLeaveToday.size, c: onLeaveToday.size > 0 ? 'purple' : 'blue',
+          a: onLeaveToday.size > 0 ? 'a-purple' : 'a-blue', sub: 'on leave today',                                f: 'leave'     },
+        { l: 'Overloaded in Period',v: overloaded,        c: overloaded > 0 ? 'red' : 'green',
+          a: overloaded > 0 ? 'a-red' : 'a-green',  sub: '&gt;7.4 hrs excl. leave',                               f: 'overloaded'},
+        { l: 'Projects in Period',  v: projectCount,      c: 'purple',a: 'a-purple',sub: 'distinct projects',     f: 'project'   },
+        { l: 'BAU in Period',       v: bauCount2,         c: 'amber', a: 'a-amber', sub: 'distinct BAU items',    f: 'bau'       },
     ];
 
     document.getElementById('stats-row').innerHTML = cards.map((c, i) => {
@@ -1102,12 +1306,14 @@ function renderHeatmap(data) {
             const isWeekend = dow === 0 || dow === 6;
             const isToday   = dateStr === TODAY_STR;
 
-            const cellData = (data.data[resource] || {})[dateStr];
-            const hours    = cellData ? cellData.hours : 0;
-            const names    = cellData ? cellData.names : [];
+            const cellData   = (data.data[resource] || {})[dateStr];
+            const hours      = cellData ? cellData.hours : 0;
+            const names      = cellData ? cellData.names : [];
+            const holType    = (data.holidays && data.holidays[resource]) ? data.holidays[resource][dateStr] : null;
 
             const cell = document.createElement('div');
-            cell.className = 'heatmap-cell ' + (isWeekend ? 'hm-empty' : getHeatClass(hours));
+            let cellClass = isWeekend ? 'hm-empty' : (holType ? 'hm-holiday' : getHeatClass(hours));
+            cell.className = 'heatmap-cell ' + cellClass;
             const thisCellPx = isWeekend ? weekendPx : cellPx;
             cell.style.width = thisCellPx + 'px';
             cell.style.height = (isQuarter ? cellPx : 28) + 'px';
@@ -1116,7 +1322,7 @@ function renderHeatmap(data) {
             if (isToday) cell.style.outline = '1px solid var(--accent-dim)';
 
             cell.dataset.hmKey = resource + '|' + dateStr;
-            cell.addEventListener('mouseenter', ev => showTooltip(ev, resource, dateStr, hours, names));
+            cell.addEventListener('mouseenter', ev => showTooltip(ev, resource, dateStr, hours, names, holType));
             cell.addEventListener('mouseleave', hideTooltip);
             cell.addEventListener('mousemove',  moveTooltip);
 
@@ -1134,24 +1340,30 @@ function renderHeatmap(data) {
 }
 
 // ── Tooltip ───────────────────────────────────────────────────────────────
-function showTooltip(e, resource, dateStr, hours, names) {
+function showTooltip(e, resource, dateStr, hours, names, holType) {
     const tip = document.getElementById('hm-tooltip');
     const d = new Date(dateStr + 'T00:00:00');
     const label = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-    const overWarning = hours > 7.4
+    const overWarning = (hours > 7.4 && !holType)
         ? '<span style="color:var(--danger)"> ⚠ OVERLOADED</span>'
         : '';
     const nameList = names.length > 0
         ? names.map(n => '<div style="color:var(--text-secondary)">&middot; ' + escHtml(n) + '</div>').join('')
         : '<div style="color:var(--text-muted)">No allocations</div>';
+    const holBadge = holType
+        ? '<div style="margin-bottom:6px;color:var(--info);font-weight:600">&#128336; ' + escHtml(holType) + '</div>'
+        : '';
 
     tip.innerHTML =
         '<div style="font-weight:600;color:var(--accent);margin-bottom:4px">' + escHtml(resource) + '</div>' +
         '<div style="color:var(--text-muted);font-size:10px;margin-bottom:6px">' + label + '</div>' +
-        '<div style="margin-bottom:6px">' +
-        (hours > 0 ? hours.toFixed(1) + ' hrs total' + overWarning : '<span style="color:var(--text-muted)">Free</span>') +
-        '</div>' +
-        '<div style="line-height:1.8;font-size:10px">' + nameList + '</div>';
+        holBadge +
+        (holType ? '' :
+            '<div style="margin-bottom:6px">' +
+            (hours > 0 ? hours.toFixed(1) + ' hrs total' + overWarning : '<span style="color:var(--text-muted)">Free</span>') +
+            '</div>' +
+            '<div style="line-height:1.8;font-size:10px">' + nameList + '</div>'
+        );
 
     tip.style.display = 'block';
     moveTooltip(e);
@@ -1227,8 +1439,9 @@ function applyHeatmapFilter() {
     if (!activeHeatmapFilter) {
         cells.forEach(c => { c.classList.remove('hm-highlight', 'hm-dimmed'); });
     } else {
-        const activeSet = activeHeatmapFilter === 'project' ? _projectCells
-                        : activeHeatmapFilter === 'bau'     ? _bauCells
+        const activeSet = activeHeatmapFilter === 'project'  ? _projectCells
+                        : activeHeatmapFilter === 'bau'      ? _bauCells
+                        : activeHeatmapFilter === 'leave'    ? _leaveCells
                         : _overloadedCells;
         cells.forEach(c => {
             const match = activeSet.has(c.dataset.hmKey);
@@ -1365,7 +1578,20 @@ async function deleteAlloc(id) {
 async function openSettings() {
     const data = await api('/api/settings/apikey');
     document.getElementById('api-key-display').value = (data && data.api_key) ? data.api_key : '';
+    document.getElementById('settings-username').value = localStorage.getItem('py_resourcing_user') || '';
+    const { url, division } = getBankHolSettings();
+    document.getElementById('bh-url').value      = url;
+    document.getElementById('bh-division').value = division;
+    const cached = _bankHols !== null ? Object.keys(_bankHols).length + ' holidays cached' : 'not yet loaded';
+    document.getElementById('bh-status').textContent = cached;
     document.getElementById('settings-modal').classList.add('open');
+}
+
+function saveUsername() {
+    const name = document.getElementById('settings-username').value.trim();
+    if (!name) { toast('Name cannot be empty', 'error'); return; }
+    localStorage.setItem('py_resourcing_user', name);
+    toast('Name updated', 'success');
 }
 
 function closeSettings() {
@@ -1392,6 +1618,282 @@ function copyApiKey() {
 document.getElementById('settings-modal').addEventListener('click', e => {
     if (e.target === document.getElementById('settings-modal')) closeSettings();
 });
+
+// ── Holidays ──────────────────────────────────────────────────────────────
+let holYear  = new Date().getFullYear();
+let holMonth = new Date().getMonth();
+let _holData  = [];
+let _bankHols = null;
+
+const HOL_TYPE_CLASS = {
+    'Holiday':     'cal-event-holiday',
+    'Half Day AM': 'cal-event-halfam',
+    'Half Day PM': 'cal-event-halfpm',
+    'Medical':     'cal-event-medical',
+};
+const HOL_TYPE_COLOR = {
+    'Holiday':     'var(--info)',
+    'Half Day AM': 'var(--warning)',
+    'Half Day PM': '#fb923c',
+    'Medical':     'var(--danger)',
+};
+const HOL_TYPE_BG = {
+    'Holiday':     'rgba(139,92,246,0.1)',
+    'Half Day AM': 'rgba(245,158,11,0.1)',
+    'Half Day PM': 'rgba(251,146,60,0.1)',
+    'Medical':     'rgba(239,68,68,0.1)',
+};
+
+function getBankHolSettings() {
+    return {
+        url:      localStorage.getItem('bh_url')      || 'https://www.gov.uk/bank-holidays.json',
+        division: localStorage.getItem('bh_division') || 'england-and-wales',
+    };
+}
+
+async function saveBankHolSettings() {
+    const url = document.getElementById('bh-url').value.trim();
+    const div = document.getElementById('bh-division').value;
+    localStorage.setItem('bh_url', url);
+    localStorage.setItem('bh_division', div);
+    _bankHols = null;
+    await refreshBankHols();
+}
+
+async function refreshBankHols() {
+    _bankHols = null;
+    document.getElementById('bh-status').textContent = 'Refreshing…';
+    await fetchBankHolidays();
+    const count = Object.keys(_bankHols).length;
+    document.getElementById('bh-status').textContent = count + ' holidays cached';
+    const holPage = document.getElementById('page-holidays');
+    if (holPage && holPage.classList.contains('active')) {
+        renderCalendar(_holData, _bankHols);
+    }
+    toast('Bank holidays refreshed — ' + count + ' loaded', 'success');
+}
+
+async function fetchBankHolidays() {
+    if (_bankHols !== null) return _bankHols;
+    const { url, division } = getBankHolSettings();
+    try {
+        const r = await fetch(url);
+        const d = await r.json();
+        _bankHols = {};
+        ((d[division] && d[division].events) || []).forEach(ev => {
+            _bankHols[ev.date] = ev.title;
+        });
+    } catch(e) {
+        console.warn('Bank holidays unavailable:', e);
+        _bankHols = {};
+    }
+    return _bankHols;
+}
+
+async function loadHolidays() {
+    const [holidays, bankHols] = await Promise.all([
+        api('/api/holidays'),
+        fetchBankHolidays(),
+    ]);
+    _holData = holidays || [];
+    renderCalendar(_holData, _bankHols || {});
+    renderHolidayTable(_holData, _bankHols || {});
+}
+
+function calPrev() {
+    holMonth--;
+    if (holMonth < 0) { holMonth = 11; holYear--; }
+    renderCalendar(_holData, _bankHols || {});
+}
+function calNext() {
+    holMonth++;
+    if (holMonth > 11) { holMonth = 0; holYear++; }
+    renderCalendar(_holData, _bankHols || {});
+}
+
+function renderCalendar(holidays, bankHols) {
+    const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    document.getElementById('cal-title').textContent = MONTHS[holMonth] + ' ' + holYear;
+
+    const firstDay = new Date(holYear, holMonth, 1);
+    const lastDay  = new Date(holYear, holMonth + 1, 0);
+    const startDow = (firstDay.getDay() + 6) % 7; // 0=Mon
+
+    // Build map dateStr → [{name, type}]
+    const holByDate = {};
+    holidays.forEach(h => {
+        const s = new Date(h.start_date + 'T00:00:00');
+        const e = new Date(h.end_date   + 'T00:00:00');
+        const d = new Date(s);
+        while (d <= e) {
+            const ds = fmtDate(d);
+            if (!holByDate[ds]) holByDate[ds] = [];
+            holByDate[ds].push({ name: h.name, type: h.type });
+            d.setDate(d.getDate() + 1);
+        }
+    });
+
+    const grid = document.getElementById('cal-body');
+    grid.innerHTML = '';
+
+    // Pad start with prev-month days
+    for (let i = 0; i < startDow; i++) {
+        const blank = document.createElement('div');
+        blank.className = 'cal-day cal-other-month';
+        const prevDate = new Date(holYear, holMonth, 1 - (startDow - i));
+        blank.innerHTML = '<div class="cal-day-num">' + prevDate.getDate() + '</div>';
+        grid.appendChild(blank);
+    }
+
+    for (let day = 1; day <= lastDay.getDate(); day++) {
+        const ds  = holYear + '-' + String(holMonth + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+        const dow = new Date(holYear, holMonth, day).getDay();
+        const isWeekend = dow === 0 || dow === 6;
+        const isToday   = ds === TODAY_STR;
+
+        const cell = document.createElement('div');
+        cell.className = 'cal-day' + (isWeekend ? ' cal-weekend' : '') + (isToday ? ' cal-today' : '');
+
+        let html = '<div class="cal-day-num">' + day + '</div>';
+        if (bankHols[ds]) {
+            html += '<div class="cal-event cal-event-bank">' + escHtml(bankHols[ds]) + '</div>';
+        }
+        (holByDate[ds] || []).forEach(ev => {
+            const cls = HOL_TYPE_CLASS[ev.type] || 'cal-event-holiday';
+            html += '<div class="cal-event ' + cls + '">' + escHtml(ev.name) + '</div>';
+        });
+        cell.innerHTML = html;
+        grid.appendChild(cell);
+    }
+
+    // Pad end
+    const totalCells = startDow + lastDay.getDate();
+    const remainder  = totalCells % 7;
+    if (remainder > 0) {
+        for (let i = 1; i <= 7 - remainder; i++) {
+            const blank = document.createElement('div');
+            blank.className = 'cal-day cal-other-month';
+            blank.innerHTML = '<div class="cal-day-num">' + i + '</div>';
+            grid.appendChild(blank);
+        }
+    }
+}
+
+function renderHolidayTable(holidays, bankHols) {
+    document.getElementById('hol-count').textContent = holidays.length;
+    const tbody = document.getElementById('hol-body');
+    if (holidays.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px">No holidays recorded.</td></tr>';
+        return;
+    }
+    window._holMap = {};
+    holidays.forEach(h => { window._holMap[h.id] = h; });
+    const sorted = [...holidays].sort((a, b) => a.start_date.localeCompare(b.start_date));
+    tbody.innerHTML = sorted.map(h => {
+        const col  = HOL_TYPE_COLOR[h.type] || 'var(--text-secondary)';
+        const bg   = HOL_TYPE_BG[h.type]   || 'transparent';
+        const pill = '<span class="pill" style="background:' + bg + ';color:' + col + '">' + escHtml(h.type) + '</span>';
+        let days = 0;
+        const dc = new Date(h.start_date + 'T00:00:00'), de = new Date(h.end_date + 'T00:00:00');
+        const dp = new Date(dc);
+        while (dp <= de) { if (dp.getDay() !== 0 && dp.getDay() !== 6) days++; dp.setDate(dp.getDate() + 1); }
+        const dur = (h.type === 'Half Day AM' || h.type === 'Half Day PM') ? '0.5d' : days + 'd';
+        return '<tr>' +
+            '<td class="fname">' + escHtml(h.name) + '</td>' +
+            '<td>' + pill + '</td>' +
+            '<td>' + h.start_date + '</td>' +
+            '<td>' + h.end_date + '</td>' +
+            '<td style="color:var(--accent)">' + dur + '</td>' +
+            '<td style="display:flex;gap:6px">' +
+            '<button class="btn btn-sm" onclick="openEditHoliday(window._holMap[\'' + h.id + '\'])">Edit</button>' +
+            '<button class="btn btn-sm" onclick="openCloneHoliday(window._holMap[\'' + h.id + '\'])">Clone</button>' +
+            '<button class="btn btn-sm btn-danger" onclick="deleteHoliday(\'' + h.id + '\')">Delete</button>' +
+            '</td>' +
+            '</tr>';
+    }).join('');
+}
+
+let _holModalMode = 'add'; // 'add' | 'edit' | 'clone'
+
+function _openHolModal(mode, h) {
+    _holModalMode = mode;
+    const today = fmtDate(new Date());
+    document.getElementById('h-id').value    = (mode === 'edit' && h) ? h.id : '';
+    document.getElementById('h-name').value  = h ? h.name  : getUsername();
+    document.getElementById('h-start').value = h ? h.start_date : today;
+    document.getElementById('h-end').value   = h ? h.end_date   : today;
+    document.getElementById('h-type').value  = h ? h.type  : 'Holiday';
+    const titles = { add: 'Add Holiday', edit: 'Edit Holiday', clone: 'Clone Holiday' };
+    const btns   = { add: 'Add Holiday', edit: 'Save Changes', clone: 'Add Clone' };
+    document.querySelector('#add-holiday-modal .modal-head h3').textContent = titles[mode];
+    document.getElementById('hol-submit-btn').textContent = btns[mode];
+    document.getElementById('add-holiday-modal').classList.add('open');
+}
+
+function openAddHoliday()       { _openHolModal('add',   null); }
+function openEditHoliday(h)     { _openHolModal('edit',  h);    }
+function openCloneHoliday(h)    { _openHolModal('clone', h);    }
+
+function closeAddHoliday() {
+    document.getElementById('add-holiday-modal').classList.remove('open');
+}
+
+document.getElementById('add-holiday-modal').addEventListener('click', e => {
+    if (e.target === e.currentTarget) closeAddHoliday();
+});
+
+async function submitHoliday(e) {
+    e.preventDefault();
+    const body = {
+        name:       document.getElementById('h-name').value.trim(),
+        start_date: document.getElementById('h-start').value,
+        end_date:   document.getElementById('h-end').value,
+        type:       document.getElementById('h-type').value,
+    };
+    if (!body.name) { toast('Name is required', 'error'); return; }
+    if (body.start_date > body.end_date) { toast('End date must be on or after start date', 'error'); return; }
+
+    let r;
+    if (_holModalMode === 'edit') {
+        const id = document.getElementById('h-id').value;
+        r = await api('/api/holidays/' + id, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (r && r.status === 'updated') {
+            toast('Holiday updated', 'success');
+            closeAddHoliday();
+            loadHolidays();
+        } else {
+            toast('Error: ' + (r && r.error ? r.error : 'unknown'), 'error');
+        }
+    } else {
+        r = await api('/api/holidays', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (r && r.id) {
+            toast(_holModalMode === 'clone' ? 'Holiday cloned' : 'Holiday added', 'success');
+            closeAddHoliday();
+            loadHolidays();
+        } else {
+            toast('Error: ' + (r && r.error ? r.error : 'unknown'), 'error');
+        }
+    }
+}
+
+async function deleteHoliday(id) {
+    if (!confirm('Delete this holiday?')) return;
+    const r = await api('/api/holidays/' + id, { method: 'DELETE' });
+    if (r && r.status === 'deleted') {
+        toast('Holiday deleted', 'info');
+        loadHolidays();
+    } else {
+        toast('Delete failed', 'error');
+    }
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -1485,6 +1987,12 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path == "/api/heatmap":
                 self._json(self._get_heatmap(params))
 
+            elif path == "/api/holidays":
+                rows = self.db.fetchall(
+                    "SELECT * FROM holidays ORDER BY start_date, name"
+                )
+                self._json([dict(r) for r in rows])
+
             elif path == "/api/settings/apikey":
                 row = self.db.fetchone("SELECT value FROM settings WHERE key='api_key'")
                 self._json({"api_key": row["value"] if row else None})
@@ -1562,6 +2070,25 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 self._json({"api_key": new_key})
 
+            elif path == "/api/holidays":
+                body       = self._read_body()
+                name       = (body.get("name") or "").strip()
+                start_date = (body.get("start_date") or "").strip()
+                end_date   = (body.get("end_date") or "").strip()
+                htype      = (body.get("type") or "Holiday").strip()
+                if not all([name, start_date, end_date]):
+                    return self._json({"error": "name, start_date and end_date are required"}, 400)
+                if htype not in ("Holiday", "Half Day AM", "Half Day PM", "Medical"):
+                    return self._json({"error": "Invalid type"}, 400)
+                if start_date > end_date:
+                    return self._json({"error": "start_date must be <= end_date"}, 400)
+                hid = self.db.new_id("hol-")
+                self.db.execute(
+                    "INSERT INTO holidays (id, name, start_date, end_date, type, created_at) VALUES (?,?,?,?,?,?)",
+                    (hid, name, start_date, end_date, htype, datetime.now().isoformat()),
+                )
+                self._json({"id": hid, "status": "created"}, 201)
+
             elif path == "/api/allocations":
                 body = self._read_body()
                 resource      = (body.get("resource") or "").strip()
@@ -1607,7 +2134,26 @@ class APIHandler(BaseHTTPRequestHandler):
             path  = urlparse(self.path).path.rstrip("/")
             parts = path.split("/")
 
-            if len(parts) == 4 and parts[1] == "api" and parts[2] == "allocations":
+            if len(parts) == 4 and parts[1] == "api" and parts[2] == "holidays":
+                hid  = parts[3]
+                body = self._read_body()
+                name       = (body.get("name") or "").strip()
+                start_date = (body.get("start_date") or "").strip()
+                end_date   = (body.get("end_date") or "").strip()
+                htype      = (body.get("type") or "Holiday").strip()
+                if not all([name, start_date, end_date]):
+                    return self._json({"error": "name, start_date and end_date are required"}, 400)
+                if htype not in ("Holiday", "Half Day AM", "Half Day PM", "Medical"):
+                    return self._json({"error": "Invalid type"}, 400)
+                if start_date > end_date:
+                    return self._json({"error": "start_date must be <= end_date"}, 400)
+                self.db.execute(
+                    "UPDATE holidays SET name=?, start_date=?, end_date=?, type=? WHERE id=?",
+                    (name, start_date, end_date, htype, hid),
+                )
+                self._json({"status": "updated"})
+
+            elif len(parts) == 4 and parts[1] == "api" and parts[2] == "allocations":
                 aid  = parts[3]
                 body = self._read_body()
                 resource      = (body.get("resource") or "").strip()
@@ -1652,6 +2198,10 @@ class APIHandler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[1] == "api" and parts[2] == "allocations":
                 aid = parts[3]
                 self.db.execute("DELETE FROM allocations WHERE id=?", (aid,))
+                self._json({"status": "deleted"})
+            elif len(parts) == 4 and parts[1] == "api" and parts[2] == "holidays":
+                hid = parts[3]
+                self.db.execute("DELETE FROM holidays WHERE id=?", (hid,))
                 self._json({"status": "deleted"})
             else:
                 self._json({"error": "Not found"}, 404)
@@ -1719,12 +2269,37 @@ class APIHandler(BaseHTTPRequestHandler):
                     result[r][ds]["names"].append(name)
                 cur += timedelta(days=1)
 
+        # Holidays
+        hol_rows = self.db.fetchall(
+            "SELECT name, start_date, end_date, type FROM holidays "
+            "WHERE end_date >= ? AND start_date <= ?",
+            (start.isoformat(), end.isoformat()),
+        )
+        hol_map = {}  # resource -> dateStr -> holiday_type
+        for row in hol_rows:
+            r = row["name"]
+            if r not in hol_map:
+                hol_map[r] = {}
+            if r not in result:
+                result[r] = {}
+                res_seen.append(r)
+            h_start   = date.fromisoformat(row["start_date"])
+            h_end     = date.fromisoformat(row["end_date"])
+            eff_start = max(h_start, start)
+            eff_end   = min(h_end,   end)
+            cur = eff_start
+            while cur <= eff_end:
+                ds = cur.isoformat()
+                hol_map[r][ds] = row["type"]
+                cur += timedelta(days=1)
+
         res_seen.sort()
 
         return {
             "resources": res_seen,
             "dates":     all_dates,
             "data":      result,
+            "holidays":  hol_map,
         }
 
 
