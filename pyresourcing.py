@@ -200,7 +200,7 @@ def build_app_html():
 [data-theme="light"] body::before { background: linear-gradient(rgba(2,132,199,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(2,132,199,0.04) 1px, transparent 1px); background-size: 50px 50px; }
 [data-theme="light"] .topbar { background: rgba(240,244,248,0.92); }
 [data-theme="light"] .modal { box-shadow: 0 20px 60px rgba(0,0,0,0.15); }
-[data-theme="light"] .heatmap-label { background: var(--bg-card); }
+[data-theme="light"] .heatmap-names-pane { box-shadow: -9999px 0 0 9999px var(--bg-card), 4px 0 8px rgba(0,0,0,0.08); }
 .theme-toggle { background: none; border: 1px solid var(--border-active); border-radius: var(--radius-sm); padding: 4px 8px; color: var(--text-secondary); cursor: pointer; font-size: 14px; line-height: 1; transition: var(--transition); display: flex; align-items: center; justify-content: center; width: 30px; height: 26px; }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: var(--font-display); background: var(--bg-primary); color: var(--text-primary); min-height: 100vh; }
@@ -318,8 +318,12 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
 
 /* Heatmap */
 .heatmap-wrap { overflow-x: auto; padding-bottom: 4px; }
+.heatmap-center { display: flex; justify-content: center; min-width: max-content; }
+.heatmap-outer { display: inline-flex; align-items: flex-start; }
+.heatmap-names-pane { flex-shrink: 0; overflow: hidden; background: var(--bg-card); border-right: 1px solid var(--border-subtle); position: sticky; left: 0; z-index: 2; box-shadow: -9999px 0 0 9999px var(--bg-card), 4px 0 8px rgba(0,0,0,0.25); }
+.heatmap-cells-pane { padding-bottom: 4px; }
 .heatmap-table { border-collapse: separate; border-spacing: 2px; font-size: 11px; }
-.heatmap-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); text-align: right; padding-right: 10px; white-space: nowrap; width: 120px; min-width: 120px; font-weight: 500; position: sticky; left: 0; background: var(--bg-card); z-index: 2; border-right: 1px solid var(--border-subtle); }
+.heatmap-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); text-align: right; padding-right: 10px; white-space: nowrap; width: 130px; min-width: 130px; font-weight: 500; }
 .heatmap-cell { width: 28px; height: 28px; border-radius: 3px; cursor: pointer; transition: transform 0.1s ease, opacity 0.1s ease; position: relative; }
 .heatmap-cell:hover { transform: scale(1.2); z-index: 10; }
 .hm-empty  { background: rgba(56,189,248,0.04); border: 1px solid rgba(56,189,248,0.06); }
@@ -1276,34 +1280,63 @@ function renderHeatmap(data) {
         return;
     }
 
-    // Reset loading styles so position:sticky works correctly inside the table
     container.style.cssText = '';
 
-    const isQuarter  = currentView === 'quarter';
-    const spacingPx  = isQuarter ? 1 : 2;
-    const weekendPx  = isQuarter ? 3 : 5;
-    const labelW     = 120;
-    const available  = (container.closest('.heatmap-wrap') || container).clientWidth - labelW - 24;
-    const weekendCount  = data.dates.filter(ds => { const d = new Date(ds+'T00:00:00'); return d.getDay()===0||d.getDay()===6; }).length;
-    const weekdayCount  = data.dates.length - weekendCount;
-    const cellPx     = Math.min(28, Math.max(10, Math.floor((available - weekendPx * weekendCount - spacingPx * data.dates.length) / weekdayCount)));
+    const isQuarter = currentView === 'quarter';
+    const spacingPx = isQuarter ? 1 : 2;
+    const weekendPx = isQuarter ? 3 : 5;
+    const labelW    = 130;
+    const wrap      = container.closest('.heatmap-wrap') || container;
+    const available = wrap.clientWidth - labelW - 24;
+    const weekendCount = data.dates.filter(ds => { const d = new Date(ds+'T00:00:00'); return d.getDay()===0||d.getDay()===6; }).length;
+    const weekdayCount = data.dates.length - weekendCount;
+    const cellPx    = Math.min(28, Math.max(10, Math.floor((available - weekendPx * weekendCount - spacingPx * data.dates.length) / weekdayCount)));
 
-    const table = document.createElement('table');
-    table.className = 'heatmap-table';
-    if (isQuarter) table.style.borderSpacing = spacingPx + 'px';
+    // ── Centering + outer wrapper ────────────────────────────────────────
+    const center = document.createElement('div');
+    center.className = 'heatmap-center';
+    const outer = document.createElement('div');
+    outer.className = 'heatmap-outer';
+
+    // ── Names pane (fixed, no scroll) ────────────────────────────────────
+    const namesPane = document.createElement('div');
+    namesPane.className = 'heatmap-names-pane';
+    namesPane.style.width = labelW + 'px';
+
+    const namesTable = document.createElement('table');
+    namesTable.style.cssText = `border-collapse:separate;border-spacing:${spacingPx}px;font-size:11px;width:${labelW}px`;
+
+    const namesThead = document.createElement('thead');
+    const namesHeaderRow = document.createElement('tr');
+    const cornerTh = document.createElement('th');
+    cornerTh.style.cssText = `width:${labelW}px;min-width:${labelW}px;padding:0`;
+    namesHeaderRow.appendChild(cornerTh);
+    namesThead.appendChild(namesHeaderRow);
+    namesTable.appendChild(namesThead);
+
+    const namesTbody = document.createElement('tbody');
+    data.resources.forEach(resource => {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.className = 'heatmap-label';
+        td.textContent = resource;
+        tr.appendChild(td);
+        namesTbody.appendChild(tr);
+    });
+    namesTable.appendChild(namesTbody);
+    namesPane.appendChild(namesTable);
+
+    // ── Cells pane ───────────────────────────────────────────────────────
+    const cellsPane = document.createElement('div');
+    cellsPane.className = 'heatmap-cells-pane';
+
+    const cellsTable = document.createElement('table');
+    cellsTable.className = 'heatmap-table';
+    if (isQuarter) cellsTable.style.borderSpacing = spacingPx + 'px';
 
     // Header row
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');
-    const corner = document.createElement('th');
-    corner.style.minWidth = '120px';
-    corner.style.width = '120px';
-    corner.style.position = 'sticky';
-    corner.style.left = '0';
-    corner.style.background = 'var(--bg-card)';
-    corner.style.zIndex = '3';
-    corner.style.borderRight = '1px solid var(--border-subtle)';
-    headerRow.appendChild(corner);
 
     data.dates.forEach(dateStr => {
         const th = document.createElement('th');
@@ -1314,7 +1347,6 @@ function renderHeatmap(data) {
         const isToday   = dateStr === TODAY_STR;
         th.style.textAlign = 'center';
         if (isWeekend) { th.style.opacity = '0.35'; th.style.width = weekendPx + 'px'; th.style.maxWidth = weekendPx + 'px'; }
-        // No label on weekends; quarter view only labels Mondays
         if (!isWeekend && (!isQuarter || dow === 1)) {
             const label = document.createElement('div');
             label.className = 'hm-date-header';
@@ -1329,18 +1361,12 @@ function renderHeatmap(data) {
     });
 
     thead.appendChild(headerRow);
-    table.appendChild(thead);
+    cellsTable.appendChild(thead);
 
     // Body rows
     const tbody = document.createElement('tbody');
-
     data.resources.forEach(resource => {
         const tr = document.createElement('tr');
-
-        const nameTd = document.createElement('td');
-        nameTd.className = 'heatmap-label';
-        nameTd.textContent = resource;
-        tr.appendChild(nameTd);
 
         data.dates.forEach(dateStr => {
             const td = document.createElement('td');
@@ -1351,10 +1377,10 @@ function renderHeatmap(data) {
             const isWeekend = dow === 0 || dow === 6;
             const isToday   = dateStr === TODAY_STR;
 
-            const cellData   = (data.data[resource] || {})[dateStr];
-            const hours      = cellData ? cellData.hours : 0;
-            const names      = cellData ? cellData.names : [];
-            const holType    = (data.holidays && data.holidays[resource]) ? data.holidays[resource][dateStr] : null;
+            const cellData = (data.data[resource] || {})[dateStr];
+            const hours    = cellData ? cellData.hours : 0;
+            const names    = cellData ? cellData.names : [];
+            const holType  = (data.holidays && data.holidays[resource]) ? data.holidays[resource][dateStr] : null;
 
             const cell = document.createElement('div');
             let cellClass = isWeekend ? 'hm-empty' : (holType ? 'hm-holiday' : getHeatClass(hours));
@@ -1378,9 +1404,25 @@ function renderHeatmap(data) {
         tbody.appendChild(tr);
     });
 
-    table.appendChild(tbody);
+    cellsTable.appendChild(tbody);
+    cellsPane.appendChild(cellsTable);
+
+    outer.appendChild(namesPane);
+    outer.appendChild(cellsPane);
+    center.appendChild(outer);
+
     container.innerHTML = '';
-    container.appendChild(table);
+    container.appendChild(center);
+
+    // Sync row heights: measure cells table rows, apply to names table rows
+    requestAnimationFrame(() => {
+        const cellRows  = [...cellsTable.querySelectorAll('tr')];
+        const nameRows  = [...namesTable.querySelectorAll('tr')];
+        cellRows.forEach((row, i) => {
+            if (nameRows[i]) nameRows[i].style.height = row.getBoundingClientRect().height + 'px';
+        });
+    });
+
     applyHeatmapFilter();
 }
 
