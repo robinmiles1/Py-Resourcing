@@ -1280,8 +1280,8 @@ function renderCharts(allocs, ps, pe) {
         donutSvg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${projCount > 0 ? '#38bdf8' : '#f59e0b'}"/>`;
         donutSvg += `<circle cx="${cx}" cy="${cy}" r="${ir}" fill="#10151e"/>`;
     }
-    donutSvg += `<text x="${cx}" y="${cy-8}" text-anchor="middle" fill="#e2e8f0" font-size="28" font-weight="700" font-family="JetBrains Mono,monospace">${total}</text>`;
-    donutSvg += `<text x="${cx}" y="${cy+14}" text-anchor="middle" fill="#8b99ad" font-size="12" font-family="Outfit,sans-serif">allocations</text>`;
+    donutSvg += `<text x="${cx}" y="${cy-8}" text-anchor="middle" fill="var(--text-primary)" font-size="28" font-weight="700" font-family="JetBrains Mono,monospace">${total}</text>`;
+    donutSvg += `<text x="${cx}" y="${cy+14}" text-anchor="middle" fill="var(--text-secondary)" font-size="12" font-family="Outfit,sans-serif">allocations</text>`;
     donutSvg += `</svg>`;
 
     const legend = `<div style="display:flex;flex-direction:column;gap:10px;justify-content:center">
@@ -1325,11 +1325,11 @@ function renderCharts(allocs, ps, pe) {
         const tot = ph + bh;
         const pw  = (ph / maxH) * barMaxW, bw = (bh / maxH) * barMaxW;
         const short = res.length > 15 ? res.slice(0,14)+'…' : res;
-        barsSvg += `<text x="${labelW-6}" y="${y+barH/2+4}" text-anchor="end" fill="#8b99ad" font-size="10" font-family="Outfit,sans-serif">${short}</text>`;
+        barsSvg += `<text x="${labelW-6}" y="${y+barH/2+4}" text-anchor="end" fill="var(--text-secondary)" font-size="10" font-family="Outfit,sans-serif">${short}</text>`;
         barsSvg += `<rect x="${labelW}" y="${y}" width="${barMaxW}" height="${barH}" rx="3" fill="rgba(255,255,255,0.04)"/>`;
         if (pw > 0) barsSvg += `<rect x="${labelW}" y="${y}" width="${pw}" height="${barH}" rx="3" fill="#38bdf8"/>`;
         if (bw > 0) barsSvg += `<rect x="${labelW+pw}" y="${y}" width="${bw}" height="${barH}" rx="${pw>0?'0 3 3 0':'3'}" fill="#f59e0b"/>`;
-        if (tot > 0) barsSvg += `<text x="${labelW+pw+bw+5}" y="${y+barH/2+4}" fill="#e2e8f0" font-size="9" font-family="JetBrains Mono,monospace">${tot.toFixed(0)}h</text>`;
+        if (tot > 0) barsSvg += `<text x="${labelW+pw+bw+5}" y="${y+barH/2+4}" fill="var(--text-primary)" font-size="9" font-family="JetBrains Mono,monospace">${tot.toFixed(0)}h</text>`;
     });
     barsSvg += `</svg>`;
     document.getElementById('chart-bars').innerHTML = barsSvg;
