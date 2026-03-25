@@ -47,13 +47,26 @@ log = logging.getLogger("pyresourcing")
 # ======================================================================
 
 class Database:
+    """SQLite database layer.
+
+    Uses thread-local connections so each request-handling thread gets its own
+    SQLite connection — required because sqlite3 connections are not thread-safe.
+    WAL (Write-Ahead Logging) mode is enabled so reads and writes can overlap
+    without blocking each other.
+    """
+
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        self._local = threading.local()
+        self._local = threading.local()  # one connection object per thread
         self._init_db()
 
     @property
     def conn(self):
+        """Return (or lazily create) the SQLite connection for the current thread.
+
+        WAL mode and foreign keys are enabled on every new connection.
+        Row factory is set to sqlite3.Row so results are accessible by column name.
+        """
         if not hasattr(self._local, "conn") or self._local.conn is None:
             self._local.conn = sqlite3.connect(str(self.db_path), timeout=10)
             self._local.conn.row_factory = sqlite3.Row
@@ -62,6 +75,11 @@ class Database:
         return self._local.conn
 
     def _init_db(self):
+        """Create tables and indexes on first run, then run migrations and seed the API key.
+
+        Uses a direct connection (not thread-local) because this runs once at startup
+        before any request threads exist.
+        """
         c = sqlite3.connect(str(self.db_path))
         c.executescript("""
             CREATE TABLE IF NOT EXISTS allocations (
@@ -113,17 +131,21 @@ class Database:
         c.commit()
 
     def execute(self, sql, params=()):
+        """Execute a write query and commit. Returns the cursor."""
         cur = self.conn.execute(sql, params)
         self.conn.commit()
         return cur
 
     def fetchone(self, sql, params=()):
+        """Execute a read query and return the first row, or None."""
         return self.conn.execute(sql, params).fetchone()
 
     def fetchall(self, sql, params=()):
+        """Execute a read query and return all rows as a list."""
         return self.conn.execute(sql, params).fetchall()
 
     def new_id(self, prefix=""):
+        """Generate a short random ID (first 8 chars of a UUID), optionally prefixed."""
         short = str(uuid.uuid4())[:8]
         return f"{prefix}{short}" if prefix else short
 
@@ -765,25 +787,36 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
 
 <script>
 // ── State ────────────────────────────────────────────────────────────────
+// currentView: which heatmap period is shown — 'week', 'month', or 'quarter'
 let currentView          = 'month';
+// periodOffset: how many periods forward/back from today (0 = current period)
 let periodOffset         = 0;
+// activeHeatmapFilter: which stat card filter is active, or null for none
+// values: 'project' | 'bau' | 'leave' | 'overloaded' | null
 let activeHeatmapFilter  = null;
+// Cell sets used by the heatmap filter — each holds 'resource|dateStr' keys
+// built by renderStats() and consumed by applyHeatmapFilter()
 let _projectCells        = new Set();
 let _bauCells            = new Set();
 let _overloadedCells     = new Set();
 let _leaveCells          = new Set();
+// Cached allocation data and period bounds for the period table (re-used on filter change)
 let _periodAllocsData    = [];
 let _periodStart         = '';
 let _periodEnd           = '';
 const TODAY_STR  = new Date().toISOString().slice(0, 10);
 
 // ── Theme ─────────────────────────────────────────────────────────────────
+// Apply saved theme immediately on load to avoid a flash of the wrong theme.
+// Preference is stored in localStorage under 'py_resourcing_theme'; defaults to dark.
+// The data-theme attribute on <html> drives the CSS variable overrides in [data-theme="light"].
 (function() {
     const saved = localStorage.getItem('py_resourcing_theme') || 'dark';
     document.documentElement.setAttribute('data-theme', saved);
     document.getElementById('theme-toggle-btn').textContent = saved === 'light' ? '🌙' : '☀';
 })();
 function toggleTheme() {
+    // Swap between dark and light, persist the new value, update the button icon
     const cur = document.documentElement.getAttribute('data-theme') || 'dark';
     const next = cur === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', next);
@@ -792,6 +825,9 @@ function toggleTheme() {
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────
+
+// Show a transient notification banner. type: 'info' | 'success' | 'error' | 'warning'
+// Automatically removed after 5 seconds.
 function toast(msg, type = 'info') {
     const c = document.getElementById('toasts');
     const t = document.createElement('div');
@@ -801,6 +837,8 @@ function toast(msg, type = 'info') {
     setTimeout(() => t.remove(), 5000);
 }
 
+// Wrapper around fetch() that always returns parsed JSON, or null on network/parse error.
+// opts is passed directly to fetch (method, headers, body etc).
 async function api(url, opts) {
     try {
         const r = await fetch(url, opts);
@@ -811,6 +849,7 @@ async function api(url, opts) {
     }
 }
 
+// Escape a string for safe insertion into innerHTML (prevents XSS from user-supplied data).
 function escHtml(s) {
     return String(s)
         .replace(/&/g, '&amp;')
@@ -818,12 +857,16 @@ function escHtml(s) {
         .replace(/>/g, '&gt;');
 }
 
+// Format a JS Date as YYYY-MM-DD (ISO date string, local time).
 function fmtDate(d) {
     const pad = n => String(n).padStart(2, '0');
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
 }
 
 // ── User identity (localStorage) ─────────────────────────────────────────
+// Retrieve the user's display name from localStorage.
+// On first visit, prompts the user and saves the result.
+// Used to pre-fill the Resource field on new allocation and holiday forms.
 function getUsername() {
     let u = localStorage.getItem('py_resourcing_user');
     if (!u) {
@@ -855,6 +898,11 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 });
 
 // ── Period window ─────────────────────────────────────────────────────────
+// Return {start, end} Date objects for the currently selected period.
+// periodOffset shifts the window forward/back: 0 = current, -1 = previous, +1 = next.
+//   week    → Mon–Sun of the offset week
+//   month   → full calendar month
+//   quarter → Jan–Mar / Apr–Jun / Jul–Sep / Oct–Dec
 function getPeriodWindow() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -903,6 +951,8 @@ document.getElementById('btn-prev').addEventListener('click', () => { periodOffs
 document.getElementById('btn-next').addEventListener('click', () => { periodOffset++; loadDashboard(); });
 
 // ── Dashboard ─────────────────────────────────────────────────────────────
+// Fetch heatmap data and all allocations in parallel, then render all dashboard
+// components: stat cards, heatmap, synopsis, period table, and charts.
 async function loadDashboard() {
     updatePeriodLabel();
     const { start, end } = getPeriodWindow();
@@ -922,6 +972,9 @@ async function loadDashboard() {
 }
 
 // ── Team synopsis ─────────────────────────────────────────────────────────
+// Render the Team Synopsis panel showing aggregate stats for the current period:
+// active resource count, average daily team load, busiest/quietest days, and
+// most/least utilised resources. Hidden if there are no allocations.
 function renderSynopsis(data) {
     const panel = document.getElementById('synopsis-panel');
     const body  = document.getElementById('synopsis-body');
@@ -1006,6 +1059,9 @@ function renderSynopsis(data) {
 }
 
 // ── Period allocations table ──────────────────────────────────────────────
+// Cache the allocation data and period bounds, then render the table.
+// Data is cached so that applyHeatmapFilter() can re-render the table without
+// needing to re-fetch from the server.
 function renderPeriodTable(allocs, startStr, endStr) {
     _periodAllocsData = allocs;
     _periodStart      = startStr;
@@ -1013,6 +1069,9 @@ function renderPeriodTable(allocs, startStr, endStr) {
     _renderPeriodTable();
 }
 
+// Render the "Allocations in Period" table using cached data.
+// Filters by date overlap with the current period, and by the active heatmap filter
+// (project / bau) if one is set.
 function _renderPeriodTable() {
     let inPeriod = _periodAllocsData.filter(a => a.start_date <= _periodEnd && a.end_date >= _periodStart);
     if (activeHeatmapFilter === 'project') inPeriod = inPeriod.filter(a => a.type === 'Project');
@@ -1044,6 +1103,16 @@ function _renderPeriodTable() {
 }
 
 // ── Stat cards ────────────────────────────────────────────────────────────
+// Render the stat card row and build the four heatmap filter cell sets.
+//
+// holData: {resource: {dateStr: holidayType}} — from the heatmap API response
+//
+// Cell sets (_projectCells, _bauCells, _overloadedCells, _leaveCells) each hold
+// 'resource|dateStr' keys. They are built here and consumed by applyHeatmapFilter()
+// to highlight/dim heatmap cells when a stat card is clicked.
+//
+// Overloaded threshold: 7.4 hrs/day (standard working day). Holiday days are
+// excluded from the overloaded calculation even if allocations overlap them.
 function renderStats(allocs, ps, pe, holData = {}) {
     const allocResources = new Set(allocs.map(a => a.resource));
     const holResources   = new Set(Object.keys(holData));
@@ -1169,6 +1238,10 @@ function renderStats(allocs, ps, pe, holData = {}) {
 }
 
 // ── Workload charts ───────────────────────────────────────────────────────
+// Render the Workload Breakdown panel:
+//   Left:  SVG donut chart — Project vs BAU allocation count for the period
+//   Right: SVG bar chart  — total hours per resource, split by Project/BAU
+// Panel is hidden if there are no allocations in the period.
 function renderCharts(allocs, ps, pe) {
     const panel = document.getElementById('charts-panel');
     const periodAllocs = allocs.filter(a => a.start_date <= pe && a.end_date >= ps);
@@ -1511,16 +1584,22 @@ async function loadAllocations() {
 }
 
 // ── Heatmap filter ────────────────────────────────────────────────────────
+// Toggle a heatmap filter on/off. Clicking the same filter twice clears it.
+// Updates stat card highlight state and calls applyHeatmapFilter().
 function setHeatmapFilter(filter) {
     activeHeatmapFilter = activeHeatmapFilter === filter ? null : filter;
     applyHeatmapFilter();
-    // Refresh stat cards to update active state without full reload
+    // Update stat card border highlight without a full dashboard reload
     document.querySelectorAll('.stat-card.clickable-filter').forEach(card => {
         const f = card.getAttribute('onclick').match(/'(\w+)'/)?.[1];
         card.classList.toggle('filter-active', f === activeHeatmapFilter);
     });
 }
 
+// Apply the current heatmap filter to all rendered heatmap cells.
+// Matching cells get hm-highlight; non-matching cells get hm-dimmed.
+// If no filter is active, all highlight/dim classes are removed.
+// Also re-renders the period allocations table to match the active filter.
 function applyHeatmapFilter() {
     const cells = document.querySelectorAll('[data-hm-key]');
     if (!activeHeatmapFilter) {
@@ -1540,11 +1619,14 @@ function applyHeatmapFilter() {
 }
 
 // ── Panel collapse ────────────────────────────────────────────────────────
+// Toggle a panel's collapsed state and persist it to localStorage
+// so it survives page reloads. Key: 'pc-<panel-id>'.
 function togglePanel(panel) {
     const collapsed = panel.classList.toggle('collapsed');
     if (panel.id) localStorage.setItem('pc-' + panel.id, collapsed ? '1' : '');
 }
 
+// Re-apply saved panel collapsed states on page load.
 function restorePanelStates() {
     document.querySelectorAll('.panel[id]').forEach(panel => {
         if (localStorage.getItem('pc-' + panel.id) === '1') togglePanel(panel);
@@ -1552,11 +1634,15 @@ function restorePanelStates() {
 }
 
 // ── CRQ show/hide ─────────────────────────────────────────────────────────
+// Show the CRQ number field only when type = Project (not relevant for BAU).
 function toggleCrqField(groupId, typeVal) {
     document.getElementById(groupId).style.display = typeVal === 'Project' ? '' : 'none';
 }
 
 // ── Form submit ───────────────────────────────────────────────────────────
+// Handle the New Allocation form submission. Validates required fields and
+// date ordering client-side before POSTing to /api/allocations.
+// On success: resets the form, re-populates defaults, and reloads the table.
 async function submitAlloc(e) {
     e.preventDefault();
     const body = {
@@ -1596,6 +1682,9 @@ async function submitAlloc(e) {
 }
 
 // ── Edit modal ────────────────────────────────────────────────────────────
+// Populate and open the Edit Allocation modal with the given allocation object.
+// The allocation object is passed in from window._allocData (keyed by id),
+// set when the All Allocations table is rendered.
 function openEditModal(a) {
     document.getElementById('e-id').value        = a.id;
     document.getElementById('e-resource').value  = a.resource;
@@ -1650,6 +1739,7 @@ async function submitEdit(e) {
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────
+// Confirm and delete an allocation by id. Reloads the table on success.
 async function deleteAlloc(id) {
     if (!confirm('Delete this allocation?')) return;
     const r = await api('/api/allocations/' + id, { method: 'DELETE' });
@@ -1662,6 +1752,8 @@ async function deleteAlloc(id) {
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────
+// Open the Settings modal, fetching the current API key from the server and
+// pre-populating the display name and bank holiday fields from localStorage.
 async function openSettings() {
     const data = await api('/api/settings/apikey');
     document.getElementById('api-key-display').value = (data && data.api_key) ? data.api_key : '';
@@ -1707,11 +1799,13 @@ document.getElementById('settings-modal').addEventListener('click', e => {
 });
 
 // ── Holidays ──────────────────────────────────────────────────────────────
-let holYear  = new Date().getFullYear();
-let holMonth = new Date().getMonth();
-let _holData  = [];
-let _bankHols = null;
+let holYear  = new Date().getFullYear();  // calendar display year
+let holMonth = new Date().getMonth();     // calendar display month (0-indexed)
+let _holData  = [];    // cached holiday records from /api/holidays
+let _bankHols = null;  // cached bank holiday map {dateStr: title}, null = not yet loaded
 
+// CSS class, text colour, and background colour for each holiday type.
+// Used to colour-code events in the calendar grid and the holiday list table.
 const HOL_TYPE_CLASS = {
     'Holiday':     'cal-event-holiday',
     'Half Day AM': 'cal-event-halfam',
@@ -1760,8 +1854,11 @@ async function refreshBankHols() {
     toast('Bank holidays refreshed — ' + count + ' loaded', 'success');
 }
 
+// Fetch bank holidays from the configured endpoint (gov.uk JSON format by default).
+// Results are cached in _bankHols for the lifetime of the page — call refreshBankHols()
+// to force a reload. On network failure, returns an empty object (silently degraded).
 async function fetchBankHolidays() {
-    if (_bankHols !== null) return _bankHols;
+    if (_bankHols !== null) return _bankHols;  // return cached result if available
     const { url, division } = getBankHolSettings();
     try {
         const r = await fetch(url);
@@ -1798,6 +1895,10 @@ function calNext() {
     renderCalendar(_holData, _bankHols || {});
 }
 
+// Render the month calendar grid for the current holYear/holMonth.
+// Builds a date→[{name,type}] map from all holiday records, then renders
+// a 7-column Mon–Sun grid with prev/next month padding cells.
+// Bank holidays (from bankHols) and personal holidays are shown as coloured event tags.
 function renderCalendar(holidays, bankHols) {
     const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
     document.getElementById('cal-title').textContent = MONTHS[holMonth] + ' ' + holYear;
@@ -1866,6 +1967,10 @@ function renderCalendar(holidays, bankHols) {
     }
 }
 
+// Render the Holiday List table. Calculates working days for each entry
+// (Mon–Fri, ignoring weekends) and displays duration as Nd or 0.5d for half-days.
+// window._holMap is populated here so Edit/Clone/Delete buttons can pass the
+// full holiday object without additional fetches.
 function renderHolidayTable(holidays, bankHols) {
     document.getElementById('hol-count').textContent = holidays.length;
     const tbody = document.getElementById('hol-body');
@@ -1900,8 +2005,11 @@ function renderHolidayTable(holidays, bankHols) {
     }).join('');
 }
 
-let _holModalMode = 'add'; // 'add' | 'edit' | 'clone'
+let _holModalMode = 'add'; // tracks current modal intent: 'add' | 'edit' | 'clone'
 
+// Shared helper that opens the Add/Edit/Clone holiday modal.
+// mode: 'add' (empty form), 'edit' (pre-filled, PUT on submit),
+//       'clone' (pre-filled, POST on submit — creates a new record)
 function _openHolModal(mode, h) {
     _holModalMode = mode;
     const today = fmtDate(new Date());
@@ -1929,6 +2037,8 @@ document.getElementById('add-holiday-modal').addEventListener('click', e => {
     if (e.target === e.currentTarget) closeAddHoliday();
 });
 
+// Handle the Add/Edit/Clone holiday form submission.
+// Routes to PUT (edit) or POST (add/clone) based on _holModalMode.
 async function submitHoliday(e) {
     e.preventDefault();
     const body = {
@@ -1983,6 +2093,8 @@ async function deleteHoliday(id) {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────
+// On page load: set default form values, restore panel collapsed states,
+// load the dashboard, and set up a 60-second auto-refresh interval.
 document.addEventListener('DOMContentLoaded', () => {
     const username = getUsername();
     document.getElementById('f-resource').value = username;
@@ -2005,12 +2117,37 @@ document.addEventListener('DOMContentLoaded', () => {
 # ======================================================================
 
 class APIHandler(BaseHTTPRequestHandler):
-    db: Database = None
+    """HTTP request handler for all routes.
+
+    A single class handles the SPA page and all /api/* endpoints.
+    The db class attribute is set at startup (main()) and shared across all threads.
+    Each request is handled in its own thread by ThreadingHTTPServer; the Database
+    class provides thread-local connections so concurrent requests don't conflict.
+
+    Route summary:
+        GET  /                      — serve the SPA HTML
+        GET  /api/allocations       — list allocations (optional filters: resource, start, end)
+        POST /api/allocations       — create allocation
+        PUT  /api/allocations/<id>  — update allocation
+        DEL  /api/allocations/<id>  — delete allocation
+        GET  /api/resources         — distinct resource names
+        GET  /api/heatmap           — aggregated heatmap data for a date range
+        GET  /api/holidays          — list holidays
+        POST /api/holidays          — create holiday
+        PUT  /api/holidays/<id>     — update holiday
+        DEL  /api/holidays/<id>     — delete holiday
+        GET  /api/settings/apikey   — retrieve API key
+        POST /api/settings/apikey   — regenerate API key
+        GET  /api/stats             — live stats (API key required)
+    """
+
+    db: Database = None  # set by main() before the server starts
 
     def log_message(self, format, *args):
-        pass  # suppress request noise
+        pass  # suppress per-request console noise (startup logs via the 'log' logger)
 
     def _json(self, data, status=200):
+        """Serialise data as JSON and write the response with appropriate headers."""
         body = json.dumps(data, default=str).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -2020,6 +2157,7 @@ class APIHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _html(self, html):
+        """Write an HTML response (used only for the SPA page)."""
         body = html.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -2028,10 +2166,12 @@ class APIHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_body(self):
+        """Read and parse the JSON request body. Returns an empty dict if no body."""
         length = int(self.headers.get("Content-Length", 0))
         return json.loads(self.rfile.read(length)) if length else {}
 
     def do_OPTIONS(self):
+        """Handle CORS preflight requests from browsers."""
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
@@ -2039,6 +2179,9 @@ class APIHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        """Handle all GET requests. Routes by path; returns 404 for unknown paths.
+        All exceptions are caught and returned as a 500 JSON error to avoid crashing threads.
+        """
         try:
             parsed = urlparse(self.path)
             path   = parsed.path.rstrip("/") or "/"
@@ -2144,6 +2287,7 @@ class APIHandler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, 500)
 
     def do_POST(self):
+        """Handle POST requests for creating allocations, holidays, and regenerating the API key."""
         try:
             parsed = urlparse(self.path)
             path   = parsed.path.rstrip("/")
@@ -2217,9 +2361,12 @@ class APIHandler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, 500)
 
     def do_PUT(self):
+        """Handle PUT requests for updating an existing allocation or holiday.
+        Path format: /api/<resource>/<id> — id is extracted from path parts[3].
+        """
         try:
             path  = urlparse(self.path).path.rstrip("/")
-            parts = path.split("/")
+            parts = path.split("/")  # ['', 'api', 'allocations'|'holidays', '<id>']
 
             if len(parts) == 4 and parts[1] == "api" and parts[2] == "holidays":
                 hid  = parts[3]
@@ -2278,6 +2425,7 @@ class APIHandler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, 500)
 
     def do_DELETE(self):
+        """Handle DELETE requests for removing an allocation or holiday by id."""
         try:
             path = urlparse(self.path).path.rstrip("/")
             parts = path.split("/")
@@ -2299,11 +2447,30 @@ class APIHandler(BaseHTTPRequestHandler):
 
     # ── Heatmap aggregation ───────────────────────────────────────────────
     def _get_heatmap(self, params):
+        """Aggregate allocation hours and holiday data into a heatmap-ready structure.
+
+        Query parameters:
+            start, end — ISO date strings (YYYY-MM-DD). If omitted, defaults to the
+                         current 4-week window starting on Monday.
+
+        The period is capped at 92 days (one quarter) to keep the response size
+        and the browser rendering cost reasonable.
+
+        Returns a dict:
+            resources  — sorted list of resource names that appear in the period
+            dates      — list of all ISO date strings in the period (including weekends)
+            data       — {resource: {dateStr: {hours: float, names: [str]}}}
+                         hours = sum of hours_per_day across all overlapping allocations
+                         names = deduplicated list of allocation names for tooltip display
+            holidays   — {resource: {dateStr: holidayType}}
+                         used by the browser to colour cells purple and exclude from overload calc
+        """
         start_str = params.get("start", [None])[0]
         end_str   = params.get("end",   [None])[0]
 
         today = date.today()
         if not start_str or not end_str:
+            # Default: current Mon → 4 weeks forward
             dow   = today.weekday()
             start = today - timedelta(days=dow)
             end   = start + timedelta(days=27)
@@ -2315,13 +2482,14 @@ class APIHandler(BaseHTTPRequestHandler):
                 start = today
                 end   = today + timedelta(days=6)
 
-        # Cap at 92 days (quarter)
+        # Cap at 92 days (one quarter) to limit response size and render cost
         if (end - start).days > 92:
             end = start + timedelta(days=92)
 
         n_days    = (end - start).days + 1
         all_dates = [(start + timedelta(days=i)).isoformat() for i in range(n_days)]
 
+        # Fetch all allocations that overlap the period (date range overlap: end >= start AND start <= end)
         rows = self.db.fetchall(
             "SELECT resource, start_date, end_date, hours_per_day, name "
             "FROM allocations WHERE end_date >= ? AND start_date <= ? "
@@ -2329,8 +2497,8 @@ class APIHandler(BaseHTTPRequestHandler):
             (start.isoformat(), end.isoformat()),
         )
 
-        result   = {}
-        res_seen = []
+        result   = {}  # {resource: {dateStr: {hours, names}}}
+        res_seen = []  # ordered list of resources as first encountered
 
         for row in rows:
             r = row["resource"]
@@ -2343,9 +2511,11 @@ class APIHandler(BaseHTTPRequestHandler):
             h       = row["hours_per_day"]
             name    = row["name"]
 
+            # Clamp allocation range to the requested period
             eff_start = max(a_start, start)
             eff_end   = min(a_end,   end)
 
+            # Walk every day in the clamped range, accumulating hours and names
             cur = eff_start
             while cur <= eff_end:
                 ds = cur.isoformat()
@@ -2356,18 +2526,22 @@ class APIHandler(BaseHTTPRequestHandler):
                     result[r][ds]["names"].append(name)
                 cur += timedelta(days=1)
 
-        # Holidays
+        # ── Holidays ─────────────────────────────────────────────────────
+        # Fetch holiday records that overlap the period.
+        # Resources that only have holidays (no allocations) are added to res_seen
+        # so they still appear as rows in the heatmap.
         hol_rows = self.db.fetchall(
             "SELECT name, start_date, end_date, type FROM holidays "
             "WHERE end_date >= ? AND start_date <= ?",
             (start.isoformat(), end.isoformat()),
         )
-        hol_map = {}  # resource -> dateStr -> holiday_type
+        hol_map = {}  # {resource: {dateStr: holidayType}}
         for row in hol_rows:
             r = row["name"]
             if r not in hol_map:
                 hol_map[r] = {}
             if r not in result:
+                # Resource has no allocations but does have leave — include them in the heatmap
                 result[r] = {}
                 res_seen.append(r)
             h_start   = date.fromisoformat(row["start_date"])
@@ -2380,7 +2554,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 hol_map[r][ds] = row["type"]
                 cur += timedelta(days=1)
 
-        res_seen.sort()
+        res_seen.sort()  # alphabetical order for consistent display
 
         return {
             "resources": res_seen,
