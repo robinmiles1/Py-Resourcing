@@ -172,6 +172,36 @@ def build_app_html():
     --radius-sm: 6px;
     --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
+[data-theme="light"] {
+    --bg-primary: #f0f4f8;
+    --bg-secondary: #e8edf3;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f5f8fc;
+    --bg-elevated: #dde4ed;
+    --bg-input: #f8fafc;
+    --border-subtle: rgba(14, 100, 150, 0.1);
+    --border-active: rgba(14, 100, 150, 0.25);
+    --border-focus: rgba(14, 100, 150, 0.5);
+    --text-primary: #1a2332;
+    --text-secondary: #3d5166;
+    --text-muted: #7a8fa3;
+    --accent: #0284c7;
+    --accent-glow: rgba(2, 132, 199, 0.1);
+    --accent-dim: rgba(2, 132, 199, 0.4);
+    --success: #16a34a;
+    --success-bg: rgba(22, 163, 74, 0.08);
+    --warning: #d97706;
+    --warning-bg: rgba(217, 119, 6, 0.08);
+    --danger: #dc2626;
+    --danger-bg: rgba(220, 38, 38, 0.08);
+    --info: #7c3aed;
+    --info-bg: rgba(124, 58, 237, 0.08);
+}
+[data-theme="light"] body::before { background: linear-gradient(rgba(2,132,199,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(2,132,199,0.04) 1px, transparent 1px); background-size: 50px 50px; }
+[data-theme="light"] .topbar { background: rgba(240,244,248,0.92); }
+[data-theme="light"] .modal { box-shadow: 0 20px 60px rgba(0,0,0,0.15); }
+[data-theme="light"] .heatmap-label { background: var(--bg-card); }
+.theme-toggle { background: none; border: 1px solid var(--border-active); border-radius: var(--radius-sm); padding: 4px 8px; color: var(--text-secondary); cursor: pointer; font-size: 14px; line-height: 1; transition: var(--transition); display: flex; align-items: center; justify-content: center; width: 30px; height: 26px; }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: var(--font-display); background: var(--bg-primary); color: var(--text-primary); min-height: 100vh; }
 body::before { content: ''; position: fixed; inset: 0; background: linear-gradient(rgba(56,189,248,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(56,189,248,0.015) 1px, transparent 1px); background-size: 50px 50px; pointer-events: none; z-index: 0; }
@@ -357,6 +387,7 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
     <div class="topbar-status">
         <div style="display:flex;align-items:center;gap:6px"><div class="status-dot"></div><span>ONLINE</span></div>
         <span id="clock"></span>
+        <button class="theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle theme"></button>
         <button class="btn btn-sm" onclick="openSettings()" title="Settings" style="padding:4px 8px;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -741,6 +772,20 @@ let _periodAllocsData    = [];
 let _periodStart         = '';
 let _periodEnd           = '';
 const TODAY_STR  = new Date().toISOString().slice(0, 10);
+
+// ── Theme ─────────────────────────────────────────────────────────────────
+(function() {
+    const saved = localStorage.getItem('py_resourcing_theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', saved);
+    document.getElementById('theme-toggle-btn').textContent = saved === 'light' ? '🌙' : '☀';
+})();
+function toggleTheme() {
+    const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+    const next = cur === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('py_resourcing_theme', next);
+    document.getElementById('theme-toggle-btn').textContent = next === 'light' ? '🌙' : '☀';
+}
 
 // ── Utilities ────────────────────────────────────────────────────────────
 function toast(msg, type = 'info') {
