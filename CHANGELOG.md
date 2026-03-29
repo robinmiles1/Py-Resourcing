@@ -4,6 +4,13 @@ All notable changes to Py Resourcing.
 
 ---
 
+## [2.0] — 2026-03-29
+
+### Changed
+- **UI rebrand** — app renamed to WorkFlow in browser title and topbar ("Work" white, "Flow" accent blue)
+
+---
+
 ## [1.9] — 2026-03-29
 
 ### Added

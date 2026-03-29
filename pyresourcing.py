@@ -160,7 +160,7 @@ def build_app_html():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Py Resourcing — Team Capacity Manager</title>
+<title>WorkFlow — Team Capacity Manager</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -437,7 +437,7 @@ body::before { content: ''; position: fixed; inset: 0; background: linear-gradie
             <circle cx="17" cy="10" r="2.5" stroke="#38bdf8" stroke-width="1.4" fill="none"/>
             <path d="M5 19c0-2.2 1.8-4 4-4h8c2.2 0 4 1.8 4 4" stroke="#22c55e" stroke-width="1.4" stroke-linecap="round" fill="none"/>
         </svg>
-        <span>Py</span>Resourcing
+        <span><span style="color:var(--text-primary)">Work</span>Flow</span>
     </div>
     <div class="topbar-nav">
         <button class="nav-btn active" data-page="dashboard">Dashboard</button>
