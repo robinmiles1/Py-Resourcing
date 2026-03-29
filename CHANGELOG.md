@@ -4,6 +4,14 @@ All notable changes to Py Resourcing.
 
 ---
 
+## [1.9] — 2026-03-29
+
+### Added
+- **High contrast mode** — black background, `#00b4ff` blue accents/borders, white text. Toggled via the theme button in the topbar
+- **Three-way theme cycle** — button now cycles dark → light → high contrast → dark, with icons ☀ / ◑ / 🌙 and a tooltip indicating the next mode
+
+---
+
 ## [1.3] — 2026-03-19
 
 ### Added

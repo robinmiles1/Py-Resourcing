@@ -223,6 +223,40 @@ def build_app_html():
 [data-theme="light"] .topbar { background: rgba(240,244,248,0.92); }
 [data-theme="light"] .modal { box-shadow: 0 20px 60px rgba(0,0,0,0.15); }
 [data-theme="light"] .heatmap-names-pane { box-shadow: -9999px 0 0 9999px var(--bg-card), 4px 0 8px rgba(0,0,0,0.08); }
+[data-theme="hc"] {
+    --bg-primary: #000000;
+    --bg-secondary: #0a0a0a;
+    --bg-card: #0d0d0d;
+    --bg-card-hover: #1a1a1a;
+    --bg-elevated: #1a1a1a;
+    --bg-input: #000000;
+    --border-subtle: rgba(0,180,255,0.4);
+    --border-active: rgba(0,180,255,0.8);
+    --border-focus: #00b4ff;
+    --text-primary: #ffffff;
+    --text-secondary: #00b4ff;
+    --text-muted: #aaaaaa;
+    --accent: #00b4ff;
+    --accent-glow: rgba(0,180,255,0.15);
+    --accent-dim: rgba(0,180,255,0.6);
+    --success: #00ff99;
+    --success-bg: rgba(0,255,153,0.12);
+    --warning: #ff9900;
+    --warning-bg: rgba(255,153,0,0.12);
+    --danger: #ff4444;
+    --danger-bg: rgba(255,68,68,0.12);
+    --info: #aa88ff;
+    --info-bg: rgba(170,136,255,0.12);
+}
+[data-theme="hc"] body::before { display: none; }
+[data-theme="hc"] .topbar { background: #000000; border-bottom: 2px solid #00b4ff; }
+[data-theme="hc"] .modal { box-shadow: 0 0 0 2px #00b4ff; }
+[data-theme="hc"] .heatmap-names-pane { box-shadow: -9999px 0 0 9999px var(--bg-card), 4px 0 0 rgba(0,180,255,0.3); }
+[data-theme="hc"] .panel { border: 1px solid rgba(0,180,255,0.3); }
+[data-theme="hc"] .form-input, [data-theme="hc"] .form-select { border-width: 2px; }
+[data-theme="hc"] .btn-primary { background: #00b4ff; color: #000000; border-color: #00b4ff; font-weight: 700; }
+[data-theme="hc"] .btn-primary:hover { background: #ffffff; border-color: #ffffff; }
+[data-theme="hc"] .stat-card { border-width: 2px; }
 .theme-toggle { background: none; border: 1px solid var(--border-active); border-radius: var(--radius-sm); padding: 4px 8px; color: var(--text-secondary); cursor: pointer; font-size: 14px; line-height: 1; transition: var(--transition); display: flex; align-items: center; justify-content: center; width: 30px; height: 26px; }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: var(--font-display); background: var(--bg-primary); color: var(--text-primary); min-height: 100vh; }
@@ -807,21 +841,27 @@ let _periodEnd           = '';
 const TODAY_STR  = new Date().toISOString().slice(0, 10);
 
 // ── Theme ─────────────────────────────────────────────────────────────────
-// Apply saved theme immediately on load to avoid a flash of the wrong theme.
-// Preference is stored in localStorage under 'py_resourcing_theme'; defaults to dark.
-// The data-theme attribute on <html> drives the CSS variable overrides in [data-theme="light"].
+// Cycles dark → light → hc (high contrast) → dark.
+// Stored in localStorage under 'py_resourcing_theme'; defaults to dark.
+const THEME_CYCLE = ['dark', 'light', 'hc'];
+const THEME_ICONS = { dark: '☀', light: '◑', hc: '🌙' };
+const THEME_TITLES = { dark: 'Switch to light mode', light: 'Switch to high contrast', hc: 'Switch to dark mode' };
 (function() {
     const saved = localStorage.getItem('py_resourcing_theme') || 'dark';
     document.documentElement.setAttribute('data-theme', saved);
-    document.getElementById('theme-toggle-btn').textContent = saved === 'light' ? '🌙' : '☀';
+    const btn = document.getElementById('theme-toggle-btn');
+    btn.textContent = THEME_ICONS[saved] || '☀';
+    btn.title = THEME_TITLES[saved] || '';
 })();
 function toggleTheme() {
-    // Swap between dark and light, persist the new value, update the button icon
     const cur = document.documentElement.getAttribute('data-theme') || 'dark';
-    const next = cur === 'dark' ? 'light' : 'dark';
+    const idx = THEME_CYCLE.indexOf(cur);
+    const next = THEME_CYCLE[(idx + 1) % THEME_CYCLE.length];
     document.documentElement.setAttribute('data-theme', next);
     localStorage.setItem('py_resourcing_theme', next);
-    document.getElementById('theme-toggle-btn').textContent = next === 'light' ? '🌙' : '☀';
+    const btn = document.getElementById('theme-toggle-btn');
+    btn.textContent = THEME_ICONS[next];
+    btn.title = THEME_TITLES[next];
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────
@@ -1216,8 +1256,8 @@ function renderStats(allocs, ps, pe, holData = {}) {
           c: resources === 0 || activePpl === resources ? 'blue' : (resources - activePpl) / resources < 0.5 ? 'amber' : 'red',
           a: resources === 0 || activePpl === resources ? 'a-blue' : (resources - activePpl) / resources < 0.5 ? 'a-amber' : 'a-red',
           sub: 'resources with work', f: null },
-        { l: 'On Leave in Period',   v: onLeaveToday.size, c: onLeaveToday.size > 0 ? 'purple' : 'blue',
-          a: onLeaveToday.size > 0 ? 'a-purple' : 'a-blue', sub: 'on leave today',                                f: 'leave'     },
+        { l: 'On Leave in Period',   v: _leaveCells.size, c: _leaveCells.size > 0 ? 'purple' : 'blue',
+          a: _leaveCells.size > 0 ? 'a-purple' : 'a-blue', sub: 'days leave in period',                          f: 'leave'     },
         { l: 'Overloaded in Period',v: overloaded,        c: overloaded > 0 ? 'red' : 'green',
           a: overloaded > 0 ? 'a-red' : 'a-green',  sub: '&gt;7.4 hrs excl. leave',                               f: 'overloaded'},
         { l: 'Projects in Period',  v: projectCount,      c: 'purple',a: 'a-purple',sub: 'distinct projects',     f: 'project'   },
